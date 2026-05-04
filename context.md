@@ -46,3 +46,55 @@ Ao requisitar sugestões para um Sábado e Domingo:
 *   A "Inteligência Artificial" da API não deve tomar a decisão final. O sistema é de **Sugestão**.
 *   **Transparência de Dados:** Nos cards de sugestão de jogos, exibir visualmente a carga de atraso do time abaixo do nome. Exemplo: **"Equipe A (5 JP) vs Equipe B (3 JP)"**.
 *   **Badges/Labels:** Exibir selos visuais como `[Equipe do Interior]` ou `[Alta Defasagem]` no card em vez de "Scores numéricos".
+*   **Design System:** Dark UI (`#050505`), destaques em laranja (`orange-500`), tipografia `font-black italic uppercase` para nomes de times, navegação por abas com pill ativa em laranja.
+
+---
+
+## 6. Progresso Atual
+
+### ✅ Backend — APIs Implementadas
+*   **`GET /api/campeonatos`** — Lista todos os campeonatos para uso nos selects do frontend.
+*   **`POST /api/campeonatos/seed`** — Gera todas as partidas de uma categoria por análise combinatória. Respeita `formato_chaves` para cruzamentos intra-chave ou totais.
+*   **`POST /api/matchmaking`** — Motor de sugestão completo: filtra por disponibilidade mútua, valida chaveamento (`equipeA.chave == equipeB.chave`), ordena por score de defasagem (`JP_a + JP_b + peso_interior`), retorna labels `[Equipe do Interior]` e `[Alta Defasagem]`.
+*   **`POST /api/partidas/confirmar`** — Move lote de partidas `pendente → aguardando`, grava `data_agendada` e insere registros em `logs_transacoes` com `batch_id` único.
+*   **`POST /api/partidas/atualizar-status`** — Move partidas individuais `aguardando → pendente` (cancelar) ou `aguardando → realizado`, com log atômico.
+*   **`POST /api/disponibilidades/importar`** — Lê CSV com colunas `equipe,data`, normaliza datas (BR e ISO), resolve equipes por nome dentro do campeonato, faz upsert em `disponibilidades`.
+
+### ✅ Frontend — Abas Implementadas (`app/page.tsx`)
+
+**Aba "Planejar"**
+*   Seleção de datas de Sábado e Domingo via inputs nativos.
+*   Chamada ao motor de matchmaking e exibição das sugestões agrupadas por categoria, com cards interativos mostrando JP de cada time e labels visuais.
+*   **Box de Montagem:** staging local de sugestões selecionadas antes de confirmar.
+*   **Rodada Oficial:** lista partidas `aguardando` agrupadas por categoria, com ações de marcar como Realizado (`✓`) ou devolver para Pendente (`↺`).
+
+**Aba "Visão Geral"**
+*   3 cards de resumo: *Total de Jogos Pendentes* (laranja), *Jogos Agendados / Aguardando* (amarelo), *Categorias Ativas* (azul).
+*   Tabela "Distribuição por Categoria" mostrando contagem de pendentes e aguardando por campeonato, carregada sob demanda ao entrar na aba.
+
+**Aba "Pool de Jogos"**
+*   Exibe todas as partidas com status `pendente` agrupadas por campeonato.
+*   Barra de busca em tempo real filtra por nome de equipe, com contador de resultados dinâmico.
+*   Botão **"Importar CSV"** abre modal com: seletor de campeonato (via `/api/campeonatos`), área de upload de arquivo, hint de formato e exibição de resultado (importados + avisos de linhas ignoradas).
+
+**Aba "Logs"**
+*   Tabela das últimas 100 transações de `logs_transacoes` com join em `partidas → equipes`.
+*   Colunas: *Partida* (Equipe A **VS** Equipe B), *Ação* (badge colorido: Agendado/Cancelado/Realizado), *Transição* de status (badge `Pendente → Aguardando` com seta), *Quando* (data/hora localizada em pt-BR).
+
+---
+
+## 7. Próximos Passos
+
+### 🔴 Alta Prioridade
+*   **Reverter Batch (Ctrl+Z real):** A infraestrutura já existe (`batch_id` em `logs_transacoes`), mas falta um endpoint `POST /api/partidas/reverter-batch` e um botão na UI para desfazer um lote inteiro de confirmações de uma vez.
+*   **Gestão de Campeonatos via UI:** Atualmente não há interface para criar campeonatos, adicionar equipes ou disparar o seed. Tudo precisa ser feito manualmente via SQL ou chamadas diretas à API.
+
+### 🟡 Média Prioridade
+*   **Importação de Jogos via CSV:** O modal de importação atual só suporta `disponibilidades`. Adicionar suporte a um segundo tipo de CSV para importar o calendário de partidas (criação em massa).
+*   **Responsividade Mobile:** A aba de Logs (grid de 4 colunas) e a navegação por abas no header precisam de ajuste para telas menores que 768px.
+*   **Feedback de Ação na Rodada Oficial:** Após marcar um jogo como realizado ou cancelar, a aba de Logs e a Visão Geral ficam desatualizadas. Invalidar/recarregar os dados dessas abas automaticamente após mutações na aba Planejar.
+
+### 🟢 Baixa Prioridade / Futuro
+*   **Autenticação:** O sistema não tem proteção de rota. Adicionar Supabase Auth ou middleware Next.js simples antes de compartilhar o link publicamente.
+*   **Exportação da Rodada:** Botão para exportar a lista de jogos `aguardando` como CSV ou PDF para comunicação externa.
+*   **Paginação de Logs:** A tabela de logs busca no máximo 100 registros. Adicionar paginação ou scroll infinito quando o volume crescer.
