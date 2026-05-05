@@ -6,7 +6,7 @@ import {
   Wand2, Trophy, Layers, ScrollText, CalendarDays, ChevronRight,
   Plus, X, Loader2, Zap, MapPin, AlertTriangle, ListChecks, RotateCcw,
   CheckCircle2, Search, Upload, RefreshCw,
-  FileText, ArrowRight, Users2, Database,
+  FileText, ArrowRight, Users2, Database, StickyNote,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
@@ -76,6 +76,7 @@ type Campeonato = {
 }
 
 type EquipeStats = { id: string; nome: string; jp: number; ja: number; jr: number }
+type ObservacaoDisp = { equipe_nome: string; observacao: string }
 type CampeonatoVG = { id: string; nome: string; equipes: EquipeStats[] }
 
 type Adversario = { partida_id: string; nome: string }
@@ -513,6 +514,7 @@ export default function Dashboard() {
   const [isConfirmando, setIsConfirmando] = useState(false)
   const [atualizandoIds, setAtualizandoIds] = useState<Set<string>>(new Set())
   const [erro, setErro] = useState('')
+  const [observacoesDisp, setObservacoesDisp] = useState<ObservacaoDisp[]>([])
 
   // ── Pool ──
   const [gruposPool, setGruposPool] = useState<GrupoPool[]>([])
@@ -578,6 +580,29 @@ export default function Dashboard() {
       .limit(1)
     const max = (data?.[0] as { numero_jogo: number } | undefined)?.numero_jogo ?? 0
     setProximoNumeroJogo(max + 1)
+  }, [])
+
+  const carregarObservacoes = useCallback(async (datas: string[]) => {
+    const datasValidas = datas.filter(Boolean)
+    if (datasValidas.length === 0) { setObservacoesDisp([]); return }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase
+      .from('disponibilidades')
+      .select('observacao, equipe:equipes!equipe_id(nome)')
+      .in('data', datasValidas)
+      .not('observacao', 'is', null) as any)
+    const rows = (data ?? []) as Array<{ observacao: string | null; equipe: { nome: string } | null }>
+    const seen = new Set<string>()
+    const obs: ObservacaoDisp[] = []
+    for (const r of rows) {
+      if (!r.equipe || !r.observacao?.trim()) continue
+      const key = `${r.equipe.nome}|${r.observacao}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        obs.push({ equipe_nome: r.equipe.nome, observacao: r.observacao })
+      }
+    }
+    setObservacoesDisp(obs.sort((a, b) => a.equipe_nome.localeCompare(b.equipe_nome, 'pt-BR')))
   }, [])
 
   const carregarPool = useCallback(async () => {
@@ -686,6 +711,7 @@ export default function Dashboard() {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error)
       setSugestoes(json.sugestoes)
+      await carregarObservacoes([dataSabado, dataDomingo].filter(Boolean))
     } catch (e: unknown) {
       setErro(e instanceof Error ? e.message : 'Erro ao gerar sugestões.')
     } finally {
@@ -771,16 +797,19 @@ export default function Dashboard() {
     disponibilidades: {
       label: 'Disponibilidades',
       icon: CalendarDays,
-      colunas: ['equipe', 'data'],
-      exemplo: 'equipe,data\nTime Alpha,15/02/2026\nTime Beta,22/02/2026',
+      colunas: ['Qual sua equipe ?', 'Quais das seguintes datas...', 'Observações:'],
+      exemplo: 'Qual sua equipe ?,Quais das seguintes datas sua equipe tem disponibilidade:,Observações:\nTime Alpha,"16/05/26 - Sábado, 30/05/26 - Sábado",Sem disponibilidade 2º período\n\n— Formato antigo também aceito —\nequipe,data\nTime Alpha,15/02/2026',
     },
   }
 
-  function detectarCellErrors(tipo: ImportTipo, rows: Record<string, string>[]): Record<string, true> {
+  function detectarCellErrors(tipo: ImportTipo, rows: Record<string, string>[], headers: string[] = []): Record<string, true> {
     const erros: Record<string, true> = {}
+    const isFormsFormat = headers.includes('Qual sua equipe ?')
     for (const [i, row] of rows.entries()) {
       if (tipo === 'equipes') {
         if (!row.nome?.trim()) erros[`${i}:nome`] = true
+      } else if (isFormsFormat) {
+        if (!row['Qual sua equipe ?']?.trim()) erros[`${i}:Qual sua equipe ?`] = true
       } else {
         if (!row.equipe?.trim()) erros[`${i}:equipe`] = true
         if (!row.data?.trim()) erros[`${i}:data`] = true
@@ -798,9 +827,10 @@ export default function Dashboard() {
       header: true,
       skipEmptyLines: true,
       complete: (result) => {
+        const fields = result.meta.fields ?? []
         setImportRows(result.data)
-        setImportHeaders(result.meta.fields ?? [])
-        setImportCellErrors(detectarCellErrors(tipo, result.data))
+        setImportHeaders(fields)
+        setImportCellErrors(detectarCellErrors(tipo, result.data, fields))
       },
     })
   }
@@ -991,7 +1021,7 @@ export default function Dashboard() {
               )}
             </section>
 
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6 items-start">
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px_260px] gap-6 items-start">
               {/* Sugestões */}
               <div className="flex flex-col gap-4">
                 <div className="flex items-center justify-between h-7">
@@ -1042,7 +1072,7 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* Sidebar — Box de Montagem */}
+              {/* Col 2 — Box de Montagem */}
               <div className="flex flex-col gap-4">
                 <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
                   <div className="px-4 py-3 border-b border-neutral-800 flex items-center justify-between">
@@ -1125,6 +1155,35 @@ export default function Dashboard() {
                         {isConfirmando ? 'Confirmando...' : `Confirmar · ${staging.length} jogo${staging.length > 1 ? 's' : ''}`}
                       </button>
                     </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Col 3 — Box de Observações */}
+              <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-neutral-800 flex items-center gap-2">
+                  <StickyNote className="w-4 h-4 text-orange-500" />
+                  <h3 className="font-bold text-white text-sm">Observações</h3>
+                  {observacoesDisp.length > 0 && (
+                    <span className="ml-auto w-5 h-5 bg-neutral-700 text-neutral-400 text-[11px] font-black rounded-full flex items-center justify-center">
+                      {observacoesDisp.length}
+                    </span>
+                  )}
+                </div>
+                <div className="p-3 flex flex-col gap-2 overflow-y-auto max-h-[420px]">
+                  {observacoesDisp.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-10">
+                      <p className="text-neutral-700 text-xs text-center leading-relaxed">
+                        Observações dos times<br />disponíveis no fim de semana
+                      </p>
+                    </div>
+                  ) : (
+                    observacoesDisp.map((obs, i) => (
+                      <div key={i} className="flex flex-col gap-1 bg-neutral-800/40 border border-neutral-700/40 rounded-xl px-3 py-2">
+                        <span className="text-[11px] font-bold text-orange-400 uppercase italic truncate">{obs.equipe_nome}</span>
+                        <span className="text-sm text-neutral-300 leading-snug">{obs.observacao}</span>
+                      </div>
+                    ))
                   )}
                 </div>
               </div>
