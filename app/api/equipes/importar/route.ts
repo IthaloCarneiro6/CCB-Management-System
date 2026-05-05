@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase'
 
-type Row = { nome: string; chave?: string; eh_interior?: string | boolean }
+type Row = { nome: string; eh_interior?: string | boolean }
 
 export async function POST(request: Request) {
   const { campeonato_id, rows } = (await request.json()) as { campeonato_id: string; rows: Row[] }
@@ -25,24 +25,28 @@ export async function POST(request: Request) {
     toInsert.push({
       campeonato_id,
       nome,
-      chave: (typeof row.chave === 'string' ? row.chave.trim() : '') || 'Unica',
+      chave: 'Unica',
       eh_interior: ['true', '1', 'sim', 'yes'].includes(String(row.eh_interior ?? '').toLowerCase()),
     })
   }
 
+  let insertedEquipeIds: string[] = []
   if (toInsert.length > 0) {
-    const { error } = await supabase.from('equipes').insert(toInsert)
+    const { data: insertedData, error } = await supabase
+      .from('equipes').insert(toInsert).select('id')
     if (error) return Response.json({ error: error.message }, { status: 500 })
+    insertedEquipeIds = (insertedData ?? []).map((e) => e.id)
   }
 
   // ── Gerar confrontos Round Robin para as equipes novas ──
   const [campRes, allEqRes, partidasRes] = await Promise.all([
-    supabase.from('campeonatos').select('formato_chaves').eq('id', campeonato_id).single(),
+    supabase.from('campeonatos').select('formato_chaves, nome').eq('id', campeonato_id).single(),
     supabase.from('equipes').select('id, chave').eq('campeonato_id', campeonato_id),
     supabase.from('partidas').select('equipe_a_id, equipe_b_id').eq('campeonato_id', campeonato_id),
   ])
 
   const formato_chaves = campRes.data?.formato_chaves ?? false
+  const campeonatoNome = campRes.data?.nome ?? ''
   const allEquipes = allEqRes.data ?? []
   const existingSet = new Set(
     (partidasRes.data ?? []).map((p) => [p.equipe_a_id, p.equipe_b_id].sort().join('|'))
@@ -72,8 +76,28 @@ export async function POST(request: Request) {
         addPair(allEquipes[i].id, allEquipes[j].id)
   }
 
-  if (novasPartidas.length > 0)
-    await supabase.from('partidas').insert(novasPartidas)
+  let novasPartidaIds: string[] = []
+  if (novasPartidas.length > 0) {
+    const { data: insertedPartidas } = await supabase
+      .from('partidas').insert(novasPartidas).select('id')
+    novasPartidaIds = (insertedPartidas ?? []).map((p) => p.id)
+  }
 
-  return Response.json({ importados: toInsert.length, partidas_geradas: novasPartidas.length, erros }, { status: 201 })
+  // ── Log de auditoria ──
+  if (insertedEquipeIds.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase.from('logs_transacoes').insert({
+      acao: 'IMPORT_EQUIPES',
+      payload: {
+        campeonato_id,
+        campeonato_nome: campeonatoNome,
+        equipe_ids: insertedEquipeIds,
+        partida_ids: novasPartidaIds,
+        total: insertedEquipeIds.length,
+      },
+      batch_id: crypto.randomUUID(),
+    } as any)
+  }
+
+  return Response.json({ importados: toInsert.length, partidas_geradas: novasPartidaIds.length, erros }, { status: 201 })
 }

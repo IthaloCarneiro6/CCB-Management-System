@@ -57,12 +57,13 @@ type PartidaPendente = {
 
 type LogTransacao = {
   id: string
-  partida_id: string
+  partida_id: string | null
   acao: string
-  status_anterior: string
-  status_novo: string
-  batch_id: string
+  status_anterior: string | null
+  status_novo: string | null
+  batch_id: string | null
   created_at: string
+  payload: Record<string, unknown> | null
   partida: {
     equipe_a: { nome: string }
     equipe_b: { nome: string }
@@ -388,6 +389,105 @@ function ImportModal({ campeonatos, onClose }: { campeonatos: Campeonato[]; onCl
   )
 }
 
+function NovoCampeonatoModal({ onClose, onCreated }: { onClose: () => void; onCreated: (c: Campeonato) => void }) {
+  const [nome, setNome] = useState('')
+  const [temporada, setTemporada] = useState('2026')
+  const [isSaving, setIsSaving] = useState(false)
+  const [erro, setErro] = useState('')
+
+  async function handleSalvar() {
+    const nomeFinal = [nome.trim(), temporada.trim()].filter(Boolean).join(' ')
+    if (!nomeFinal) { setErro('Informe o nome do campeonato.'); return }
+    setIsSaving(true)
+    setErro('')
+    try {
+      const { data, error } = await supabase
+        .from('campeonatos')
+        .insert({ nome: nomeFinal, formato_chaves: false })
+        .select('id, nome')
+        .single()
+      if (error) throw error
+      const novo = data as Campeonato
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await supabase.from('logs_transacoes').insert({
+        acao: 'CRIACAO_CAMPEONATO',
+        payload: { campeonato_id: novo.id, campeonato_nome: novo.nome },
+        batch_id: crypto.randomUUID(),
+      } as any)
+      onCreated(novo)
+    } catch (e: unknown) {
+      setErro(e instanceof Error ? e.message : 'Erro ao criar campeonato.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <div className="w-full max-w-sm bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden shadow-2xl">
+
+        <div className="px-5 py-4 border-b border-neutral-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Trophy className="w-4 h-4 text-orange-500" />
+            <h2 className="font-black italic uppercase text-white text-sm tracking-tight">
+              Novo <span className="text-orange-500">Campeonato</span>
+            </h2>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg text-neutral-600 hover:text-neutral-300 hover:bg-neutral-800 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-5 flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest">Nome / Categoria</label>
+            <input
+              type="text"
+              value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSalvar()}
+              placeholder="ex: Adulto Masc — Chave A"
+              autoFocus
+              className="bg-neutral-800 border border-neutral-700 text-neutral-200 text-sm italic rounded-xl px-3 py-2.5 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 transition-colors placeholder:not-italic placeholder:text-neutral-600"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest">Temporada</label>
+            <input
+              type="number"
+              value={temporada}
+              onChange={(e) => setTemporada(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSalvar()}
+              className="bg-neutral-800 border border-neutral-700 text-neutral-200 text-sm italic rounded-xl px-3 py-2.5 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 transition-colors w-32"
+            />
+          </div>
+
+          {erro && (
+            <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-xl px-3 py-2.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />{erro}
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 pb-5 flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-neutral-400 hover:text-neutral-200 transition-colors">
+            Cancelar
+          </button>
+          <button
+            onClick={handleSalvar}
+            disabled={!nome.trim() || isSaving}
+            className="flex items-center gap-2 bg-orange-600 hover:bg-orange-500 active:bg-orange-700 text-white font-bold px-5 py-2 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm shadow-lg shadow-orange-500/20"
+          >
+            {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+            {isSaving ? 'Criando...' : 'Criar Campeonato'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 const TABS: { id: Tab; label: string; Icon: React.ComponentType<{ className?: string }> }[] = [
@@ -419,6 +519,7 @@ export default function Dashboard() {
   const [searchPool, setSearchPool] = useState('')
   const [isLoadingPool, setIsLoadingPool] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
+  const [showNovoCampModal, setShowNovoCampModal] = useState(false)
   const [campeonatos, setCampeonatos] = useState<Campeonato[]>([])
 
   // ── Importar ──
@@ -440,6 +541,7 @@ export default function Dashboard() {
   // ── Stats ──
   const [statsVG, setStatsVG] = useState<CampeonatoVG[]>([])
   const [isLoadingStats, setIsLoadingStats] = useState(false)
+  const [filtroVG, setFiltroVG] = useState('')
 
   // ── Data loaders ──
 
@@ -494,7 +596,7 @@ export default function Dashboard() {
     try {
       const { data } = await supabase
         .from('logs_transacoes')
-        .select(`id, partida_id, acao, status_anterior, status_novo, batch_id, created_at,
+        .select(`id, partida_id, acao, status_anterior, status_novo, batch_id, created_at, payload,
           partida:partidas!partida_id(
             equipe_a:equipes!equipe_a_id(nome),
             equipe_b:equipes!equipe_b_id(nome)
@@ -663,8 +765,8 @@ export default function Dashboard() {
     equipes: {
       label: 'Equipes',
       icon: Users2,
-      colunas: ['nome', 'chave', 'eh_interior'],
-      exemplo: 'nome,chave,eh_interior\nTime Alpha,A,false\nTime Beta,A,true\nTime Gamma,B,false',
+      colunas: ['nome', 'eh_interior'],
+      exemplo: 'nome,eh_interior\nTime Alpha,false\nTime Beta,true\nTime Gamma,false',
     },
     disponibilidades: {
       label: 'Disponibilidades',
@@ -703,6 +805,12 @@ export default function Dashboard() {
     })
   }
 
+  function handleNovoCampCreated(c: Campeonato) {
+    setCampeonatos((prev) => [...prev, c].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')))
+    setImportCampeonatoId(c.id)
+    setShowNovoCampModal(false)
+  }
+
   function handleTipoChange(tipo: ImportTipo) {
     setImportTipo(tipo)
     setImportFile(null)
@@ -731,7 +839,6 @@ export default function Dashboard() {
             campeonato_id: importCampeonatoId,
             rows: importRows.map((r) => ({
               nome: r.nome?.trim(),
-              chave: r.chave?.trim(),
               eh_interior: r.eh_interior?.trim(),
             })),
           }),
@@ -770,6 +877,8 @@ export default function Dashboard() {
         adversarios: [...t.adversarios].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
       })),
   })
+
+  const statsVGFiltradas = filtroVG ? statsVG.filter((c) => c.id === filtroVG) : statsVG
 
   const gruposFiltrados = (searchPool.trim()
     ? gruposPool
@@ -1136,17 +1245,27 @@ export default function Dashboard() {
         {/* ════════════════════════ VISÃO GERAL ════════════════════════ */}
         {activeTab === 'visao-geral' && (
           <div className="flex flex-col gap-6">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-4">
               <h2 className="font-black italic uppercase text-white text-base tracking-tight">
                 Visão <span className="text-orange-500">Geral</span>
               </h2>
-              <button
-                onClick={carregarStats}
-                className="flex items-center gap-1.5 text-xs font-semibold text-neutral-500 hover:text-neutral-300 transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Atualizar
-              </button>
+              <div className="flex items-center gap-3">
+                <select
+                  value={filtroVG}
+                  onChange={(e) => setFiltroVG(e.target.value)}
+                  className="bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm italic rounded-xl px-3 py-2 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 transition-colors"
+                >
+                  <option value="">Todos os Campeonatos</option>
+                  {statsVG.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                </select>
+                <button
+                  onClick={carregarStats}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-neutral-500 hover:text-neutral-300 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Atualizar
+                </button>
+              </div>
             </div>
 
             {isLoadingStats ? (
@@ -1163,7 +1282,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
-                {statsVG.map((camp) => (
+                {statsVGFiltradas.map((camp) => (
                   <div key={camp.id} className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
                     {/* Card header */}
                     <div className="px-4 py-3 border-b border-neutral-800 flex items-center gap-2.5">
@@ -1354,14 +1473,23 @@ export default function Dashboard() {
               {/* Step 2 — Campeonato */}
               <div className="flex flex-col gap-2">
                 <label className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest">Campeonato / Categoria</label>
-                <select
-                  value={importCampeonatoId}
-                  onChange={(e) => setImportCampeonatoId(e.target.value)}
-                  className="bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 transition-colors max-w-sm"
-                >
-                  <option value="">Selecione o campeonato...</option>
-                  {campeonatos.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
-                </select>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={importCampeonatoId}
+                    onChange={(e) => setImportCampeonatoId(e.target.value)}
+                    className="bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 transition-colors flex-1 max-w-sm"
+                  >
+                    <option value="">Selecione o campeonato...</option>
+                    {campeonatos.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                  </select>
+                  <button
+                    onClick={() => setShowNovoCampModal(true)}
+                    title="Novo campeonato"
+                    className="w-10 h-10 flex items-center justify-center bg-neutral-900 border border-neutral-800 hover:border-orange-500/50 hover:bg-orange-500/10 rounded-xl text-neutral-500 hover:text-orange-400 transition-colors shrink-0"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               {/* Step 3 — Drop zone */}
@@ -1584,7 +1712,9 @@ export default function Dashboard() {
                             <span className="italic uppercase">{log.partida.equipe_b.nome}</span>
                           </p>
                         ) : (
-                          <span className="text-xs text-neutral-600 font-mono">{log.partida_id.slice(0, 8)}…</span>
+                          <span className="text-xs text-neutral-600 font-mono">
+                            {log.partida_id ? `${log.partida_id.slice(0, 8)}…` : acaoLabel(log.acao)}
+                          </span>
                         )}
                       </div>
 
@@ -1595,13 +1725,19 @@ export default function Dashboard() {
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${statusBadgeClasses(log.status_anterior)}`}>
-                          {statusLabel(log.status_anterior)}
-                        </span>
-                        <ArrowRight className="w-3 h-3 text-neutral-600 shrink-0" />
-                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${statusBadgeClasses(log.status_novo)}`}>
-                          {statusLabel(log.status_novo)}
-                        </span>
+                        {log.status_anterior && log.status_novo ? (
+                          <>
+                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${statusBadgeClasses(log.status_anterior)}`}>
+                              {statusLabel(log.status_anterior)}
+                            </span>
+                            <ArrowRight className="w-3 h-3 text-neutral-600 shrink-0" />
+                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${statusBadgeClasses(log.status_novo)}`}>
+                              {statusLabel(log.status_novo)}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-xs text-neutral-700">—</span>
+                        )}
                       </div>
 
                       <span className="text-xs text-neutral-600 whitespace-nowrap text-right">
@@ -1620,6 +1756,14 @@ export default function Dashboard() {
       {/* ── IMPORT MODAL ── */}
       {showImportModal && (
         <ImportModal campeonatos={campeonatos} onClose={() => setShowImportModal(false)} />
+      )}
+
+      {/* ── NOVO CAMPEONATO MODAL ── */}
+      {showNovoCampModal && (
+        <NovoCampeonatoModal
+          onClose={() => setShowNovoCampModal(false)}
+          onCreated={handleNovoCampCreated}
+        />
       )}
     </div>
   )

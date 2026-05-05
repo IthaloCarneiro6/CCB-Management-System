@@ -34,9 +34,9 @@ partidas
   id, campeonato_id, equipe_a_id, equipe_b_id
   status ('pendente' | 'aguardando' | 'realizado')
   data_agendada (timestamp — vem como "2025-05-10T00:00:00", não só data)
-  numero_jogo (INTEGER)   ← ⚠️ MIGRATION PENDENTE
-  horario (TEXT)          ← ⚠️ MIGRATION PENDENTE
-  local (TEXT)            ← ⚠️ MIGRATION PENDENTE
+  numero_jogo (INTEGER) 
+  horario (TEXT)          
+  local (TEXT)           
 
 disponibilidades
   id, equipe (TEXT), campeonato_id, data

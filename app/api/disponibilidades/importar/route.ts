@@ -1,22 +1,14 @@
 import Papa from 'papaparse'
 import { supabase } from '@/lib/supabase'
 
-type CsvRow = {
-  equipe: string
-  data: string
-}
+type CsvRow = { equipe: string; data: string }
 
 function parseDateToBR(valor: string): string | null {
   const trimmed = valor.trim()
-
-  // DD/MM/YYYY -> YYYY-MM-DD
   const brMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
   if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`
-
-  // YYYY-MM-DD (já no formato correto)
   const isoMatch = trimmed.match(/^\d{4}-\d{2}-\d{2}$/)
   if (isoMatch) return trimmed
-
   return null
 }
 
@@ -42,15 +34,17 @@ export async function POST(request: Request) {
     return Response.json({ error: 'CSV inválido', detalhes: parseErrors }, { status: 400 })
   }
 
-  const { data: equipes, error: eqError } = await supabase
-    .from('equipes')
-    .select('id, nome')
-    .eq('campeonato_id', campeonato_id)
+  const [equipeRes, campRes] = await Promise.all([
+    supabase.from('equipes').select('id, nome').eq('campeonato_id', campeonato_id),
+    supabase.from('campeonatos').select('nome').eq('id', campeonato_id).single(),
+  ])
 
-  if (eqError) {
-    return Response.json({ error: eqError.message }, { status: 500 })
+  if (equipeRes.error) {
+    return Response.json({ error: equipeRes.error.message }, { status: 500 })
   }
 
+  const equipes = equipeRes.data ?? []
+  const campeonatoNome = campRes.data?.nome ?? ''
   const inserir: Array<{ equipe_id: string; data: string }> = []
   const erros: string[] = []
 
@@ -63,10 +57,7 @@ export async function POST(request: Request) {
       continue
     }
 
-    const equipe = equipes?.find(
-      (e) => e.nome.toLowerCase() === nomeCSV.toLowerCase()
-    )
-
+    const equipe = equipes.find((e) => e.nome.toLowerCase() === nomeCSV.toLowerCase())
     if (!equipe) {
       erros.push(`Equipe não encontrada no campeonato: "${nomeCSV}"`)
       continue
@@ -88,17 +79,32 @@ export async function POST(request: Request) {
     )
   }
 
+  // ignoreDuplicates: true → ON CONFLICT DO NOTHING, .select() retorna apenas os inseridos
   const { data, error } = await supabase
     .from('disponibilidades')
-    .upsert(inserir, { onConflict: 'equipe_id,data' })
+    .upsert(inserir, { onConflict: 'equipe_id,data', ignoreDuplicates: true })
     .select()
 
   if (error) {
     return Response.json({ error: error.message }, { status: 500 })
   }
 
-  return Response.json(
-    { importados: data?.length ?? 0, erros },
-    { status: 201 }
-  )
+  const insertedIds = (data ?? []).map((d) => d.id).filter(Boolean) as string[]
+
+  // ── Log de auditoria ──
+  if (insertedIds.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase.from('logs_transacoes').insert({
+      acao: 'IMPORT_DISPONIBILIDADES',
+      payload: {
+        campeonato_id,
+        campeonato_nome: campeonatoNome,
+        disponibilidade_ids: insertedIds,
+        total: insertedIds.length,
+      },
+      batch_id: crypto.randomUUID(),
+    } as any)
+  }
+
+  return Response.json({ importados: data?.length ?? 0, erros }, { status: 201 })
 }
