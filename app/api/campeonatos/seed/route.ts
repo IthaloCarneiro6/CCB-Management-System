@@ -27,6 +27,18 @@ export async function POST(request: Request) {
     return Response.json({ error: 'É necessário ao menos 2 equipes cadastradas' }, { status: 400 })
   }
 
+  const { count: existentes } = await supabase
+    .from('partidas')
+    .select('id', { count: 'exact', head: true })
+    .eq('campeonato_id', campeonato_id)
+
+  if (existentes && existentes > 0) {
+    return Response.json(
+      { error: `Este campeonato já possui ${existentes} partidas geradas. Remova-as antes de rodar o seed novamente.`, partidas_existentes: existentes },
+      { status: 409 }
+    )
+  }
+
   const novasPartidas: Array<{
     campeonato_id: string
     equipe_a_id: string

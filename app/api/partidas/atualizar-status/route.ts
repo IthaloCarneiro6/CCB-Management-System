@@ -12,9 +12,14 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Campos obrigatórios ausentes' }, { status: 400 })
   }
 
-  type Payload = { status: 'pendente' | 'realizado'; data_agendada?: null }
-  const payload: Payload = { status: status_novo }
-  if (status_novo === 'pendente') payload.data_agendada = null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const payload: any = { status: status_novo }
+  if (status_novo === 'pendente') {
+    payload.data_agendada = null
+    payload.numero_jogo = null
+    payload.horario = null
+    payload.local = null
+  }
 
   const { error: updateError } = await supabase
     .from('partidas')

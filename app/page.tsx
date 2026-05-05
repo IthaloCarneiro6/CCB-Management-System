@@ -1,17 +1,19 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import Papa from 'papaparse'
 import {
   Wand2, Trophy, Layers, ScrollText, CalendarDays, ChevronRight,
   Plus, X, Loader2, Zap, MapPin, AlertTriangle, ListChecks, RotateCcw,
-  CheckCircle2, Search, Upload, BarChart3, Clock, RefreshCw,
-  FileText, ArrowRight, Activity,
+  CheckCircle2, Search, Upload, RefreshCw,
+  FileText, ArrowRight, Users2, Database,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type Tab = 'planejar' | 'visao-geral' | 'pool' | 'logs'
+type Tab = 'planejar' | 'visao-geral' | 'pool' | 'logs' | 'importar'
+type ImportTipo = 'equipes' | 'disponibilidades'
 
 type EquipeSugestao = {
   id: string
@@ -38,6 +40,9 @@ type PartidaOficial = {
   campeonato_id: string
   campeonato_nome: string
   data_agendada: string | null
+  numero_jogo: number | null
+  horario: string | null
+  local: string | null
   equipe_a: { nome: string }
   equipe_b: { nome: string }
 }
@@ -69,26 +74,29 @@ type Campeonato = {
   nome: string
 }
 
-type CategoriaBreakdown = {
-  campeonato_id: string
-  nome: string
-  pendentes: number
-  aguardando: number
-}
+type EquipeStats = { id: string; nome: string; jp: number; ja: number; jr: number }
+type CampeonatoVG = { id: string; nome: string; equipes: EquipeStats[] }
 
-type Stats = {
-  pendentes: number
-  aguardando: number
-  categoriasAtivas: number
-  breakdown: CategoriaBreakdown[]
-}
+type Adversario = { partida_id: string; nome: string }
+type TimePool = { id: string; nome: string; chave: string; adversarios: Adversario[] }
+type GrupoPool = { campeonato_id: string; campeonato_nome: string; total_pendentes: number; times: TimePool[] }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+function ymd(iso: string): string {
+  return iso ? iso.slice(0, 10) : ''
+}
+
 function formatarData(iso: string): string {
   if (!iso) return ''
-  const [ano, mes, dia] = iso.split('-')
+  const [ano, mes, dia] = ymd(iso).split('-')
   return `${dia}/${mes}/${ano}`
+}
+
+function formatarDataCurta(iso: string): string {
+  if (!iso) return ''
+  const [, mes, dia] = ymd(iso).split('-')
+  return `${dia}/${mes}`
 }
 
 function formatarDataHora(iso: string): string {
@@ -102,8 +110,8 @@ function formatarDataHora(iso: string): string {
 
 function nomeDiaSemana(iso: string): string {
   if (!iso) return ''
-  const data = new Date(`${iso}T12:00:00`)
-  return ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][data.getDay()]
+  const data = new Date(`${ymd(iso)}T12:00:00`)
+  return ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][data.getDay()] ?? ''
 }
 
 function labelClasses(label: string) {
@@ -386,6 +394,7 @@ const TABS: { id: Tab; label: string; Icon: React.ComponentType<{ className?: st
   { id: 'planejar',    label: 'Planejar',     Icon: Wand2      },
   { id: 'visao-geral', label: 'Visão Geral',  Icon: Trophy     },
   { id: 'pool',        label: 'Pool de Jogos', Icon: Layers    },
+  { id: 'importar',   label: 'Importar',      Icon: Upload     },
   { id: 'logs',        label: 'Logs',          Icon: ScrollText },
 ]
 
@@ -397,6 +406,8 @@ export default function Dashboard() {
   const [dataDomingo, setDataDomingo] = useState('')
   const [sugestoes, setSugestoes] = useState<Sugestao[]>([])
   const [staging, setStaging] = useState<Sugestao[]>([])
+  const [proximoNumeroJogo, setProximoNumeroJogo] = useState(1)
+  const [stagingLogistica, setStagingLogistica] = useState<Record<string, { numero_jogo: string; horario: string; local: string }>>({})
   const [rodadaOficial, setRodadaOficial] = useState<PartidaOficial[]>([])
   const [isLoadingSugestoes, setIsLoadingSugestoes] = useState(false)
   const [isConfirmando, setIsConfirmando] = useState(false)
@@ -404,18 +415,30 @@ export default function Dashboard() {
   const [erro, setErro] = useState('')
 
   // ── Pool ──
-  const [partidasPendentes, setPartidasPendentes] = useState<PartidaPendente[]>([])
+  const [gruposPool, setGruposPool] = useState<GrupoPool[]>([])
   const [searchPool, setSearchPool] = useState('')
   const [isLoadingPool, setIsLoadingPool] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
   const [campeonatos, setCampeonatos] = useState<Campeonato[]>([])
+
+  // ── Importar ──
+  const [importTipo, setImportTipo] = useState<ImportTipo>('equipes')
+  const [importCampeonatoId, setImportCampeonatoId] = useState('')
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importRows, setImportRows] = useState<Record<string, string>[]>([])
+  const [importHeaders, setImportHeaders] = useState<string[]>([])
+  const [importCellErrors, setImportCellErrors] = useState<Record<string, true>>({})
+  const [isDragging, setIsDragging] = useState(false)
+  const [isImportando, setIsImportando] = useState(false)
+  const [importResultado, setImportResultado] = useState<{ importados: number; erros: string[]; partidasGeradas?: number } | null>(null)
+  const importFileRef = useRef<HTMLInputElement>(null)
 
   // ── Logs ──
   const [logs, setLogs] = useState<LogTransacao[]>([])
   const [isLoadingLogs, setIsLoadingLogs] = useState(false)
 
   // ── Stats ──
-  const [stats, setStats] = useState<Stats>({ pendentes: 0, aguardando: 0, categoriasAtivas: 0, breakdown: [] })
+  const [statsVG, setStatsVG] = useState<CampeonatoVG[]>([])
   const [isLoadingStats, setIsLoadingStats] = useState(false)
 
   // ── Data loaders ──
@@ -423,16 +446,19 @@ export default function Dashboard() {
   const carregarRodadaOficial = useCallback(async () => {
     const { data } = await supabase
       .from('partidas')
-      .select(`id, campeonato_id, data_agendada,
+      .select(`id, campeonato_id, data_agendada, numero_jogo, horario, local,
         campeonato:campeonatos!campeonato_id(nome),
         equipe_a:equipes!equipe_a_id(nome),
         equipe_b:equipes!equipe_b_id(nome)`)
       .eq('status', 'aguardando')
-      .order('campeonato_id')
+      .order('data_agendada')
+      .order('local')
+      .order('numero_jogo')
     if (data) {
       setRodadaOficial(
         (data as unknown as Array<{
           id: string; campeonato_id: string; data_agendada: string | null
+          numero_jogo: number | null; horario: string | null; local: string | null
           campeonato: { nome: string } | null
           equipe_a: { nome: string }; equipe_b: { nome: string }
         }>).map((p) => ({ ...p, campeonato_nome: p.campeonato?.nome ?? 'Sem categoria' }))
@@ -440,33 +466,24 @@ export default function Dashboard() {
     }
   }, [])
 
+  const carregarProximoNumero = useCallback(async () => {
+    const { data } = await supabase
+      .from('partidas')
+      .select('numero_jogo')
+      .not('numero_jogo', 'is', null)
+      .neq('status', 'pendente')
+      .order('numero_jogo', { ascending: false })
+      .limit(1)
+    const max = (data?.[0] as { numero_jogo: number } | undefined)?.numero_jogo ?? 0
+    setProximoNumeroJogo(max + 1)
+  }, [])
+
   const carregarPool = useCallback(async () => {
     setIsLoadingPool(true)
     try {
-      const { data } = await supabase
-        .from('partidas')
-        .select(`id, campeonato_id,
-          campeonato:campeonatos!campeonato_id(nome),
-          equipe_a:equipes!equipe_a_id(nome, chave),
-          equipe_b:equipes!equipe_b_id(nome, chave)`)
-        .eq('status', 'pendente')
-        .order('campeonato_id')
-      if (data) {
-        setPartidasPendentes(
-          (data as unknown as Array<{
-            id: string; campeonato_id: string
-            campeonato: { nome: string } | null
-            equipe_a: { nome: string; chave: string }
-            equipe_b: { nome: string; chave: string }
-          }>).map((p) => ({
-            id: p.id,
-            campeonato_id: p.campeonato_id,
-            campeonato_nome: p.campeonato?.nome ?? 'Sem categoria',
-            equipe_a: p.equipe_a,
-            equipe_b: p.equipe_b,
-          }))
-        )
-      }
+      const res = await fetch('/api/pool')
+      const json = await res.json()
+      if (res.ok) setGruposPool(json.grupos)
     } finally {
       setIsLoadingPool(false)
     }
@@ -493,37 +510,36 @@ export default function Dashboard() {
   const carregarStats = useCallback(async () => {
     setIsLoadingStats(true)
     try {
-      type Row = { campeonato_id: string; campeonato: { nome: string } | null }
-      const [pendenteRes, aguardandoRes] = await Promise.all([
-        supabase.from('partidas')
-          .select('campeonato_id, campeonato:campeonatos!campeonato_id(nome)')
-          .eq('status', 'pendente'),
-        supabase.from('partidas')
-          .select('campeonato_id, campeonato:campeonatos!campeonato_id(nome)')
-          .eq('status', 'aguardando'),
+      const [campRes, eqRes, partRes] = await Promise.all([
+        supabase.from('campeonatos').select('id, nome').order('nome'),
+        supabase.from('equipes').select('id, campeonato_id, nome').order('nome'),
+        supabase.from('partidas').select('equipe_a_id, equipe_b_id, status'),
       ])
-      const pData = (pendenteRes.data ?? []) as unknown as Row[]
-      const aData = (aguardandoRes.data ?? []) as unknown as Row[]
+      const camps = campRes.data ?? []
+      const equipes = eqRes.data ?? []
+      const partidas = (partRes.data ?? []) as { equipe_a_id: string; equipe_b_id: string; status: string }[]
 
-      const map = new Map<string, CategoriaBreakdown>()
-      for (const p of pData) {
-        if (!map.has(p.campeonato_id))
-          map.set(p.campeonato_id, { campeonato_id: p.campeonato_id, nome: p.campeonato?.nome ?? 'Sem categoria', pendentes: 0, aguardando: 0 })
-        map.get(p.campeonato_id)!.pendentes++
+      const statsMap = new Map<string, { jp: number; ja: number; jr: number }>()
+      const inc = (id: string, status: string) => {
+        if (!statsMap.has(id)) statsMap.set(id, { jp: 0, ja: 0, jr: 0 })
+        const s = statsMap.get(id)!
+        if (status === 'pendente') s.jp++
+        else if (status === 'aguardando') s.ja++
+        else if (status === 'realizado') s.jr++
       }
-      for (const p of aData) {
-        if (!map.has(p.campeonato_id))
-          map.set(p.campeonato_id, { campeonato_id: p.campeonato_id, nome: p.campeonato?.nome ?? 'Sem categoria', pendentes: 0, aguardando: 0 })
-        map.get(p.campeonato_id)!.aguardando++
-      }
+      for (const p of partidas) { inc(p.equipe_a_id, p.status); inc(p.equipe_b_id, p.status) }
 
-      const breakdown = Array.from(map.values()).sort((a, b) => a.nome.localeCompare(b.nome))
-      setStats({
-        pendentes: pData.length,
-        aguardando: aData.length,
-        categoriasAtivas: new Set(pData.map((p) => p.campeonato_id)).size,
-        breakdown,
-      })
+      setStatsVG(
+        camps
+          .map((c) => ({
+            id: c.id,
+            nome: c.nome,
+            equipes: equipes
+              .filter((e) => e.campeonato_id === c.id)
+              .map((e) => ({ id: e.id, nome: e.nome, ...(statsMap.get(e.id) ?? { jp: 0, ja: 0, jr: 0 }) })),
+          }))
+          .filter((c) => c.equipes.length > 0)
+      )
     } finally {
       setIsLoadingStats(false)
     }
@@ -534,12 +550,13 @@ export default function Dashboard() {
     if (data) setCampeonatos(data)
   }, [])
 
-  useEffect(() => { carregarRodadaOficial() }, [carregarRodadaOficial])
+  useEffect(() => { carregarRodadaOficial(); carregarProximoNumero() }, [carregarRodadaOficial, carregarProximoNumero])
 
   useEffect(() => {
     if (activeTab === 'pool')        carregarPool()
     if (activeTab === 'logs')        carregarLogs()
     if (activeTab === 'visao-geral') carregarStats()
+    if (activeTab === 'importar')    carregarCampeonatos()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab])
 
@@ -575,11 +592,18 @@ export default function Dashboard() {
   }
 
   function addToStaging(s: Sugestao) {
-    if (!staging.some((x) => x.partida_id === s.partida_id)) setStaging((prev) => [...prev, s])
+    if (!staging.some((x) => x.partida_id === s.partida_id)) {
+      setStaging((prev) => [...prev, s])
+      setStagingLogistica((prev) => {
+        const offset = Object.keys(prev).length
+        return { ...prev, [s.partida_id]: { numero_jogo: String(proximoNumeroJogo + offset), horario: '', local: '' } }
+      })
+    }
   }
 
   function removeFromStaging(id: string) {
     setStaging((prev) => prev.filter((s) => s.partida_id !== id))
+    setStagingLogistica((prev) => { const n = { ...prev }; delete n[id]; return n })
   }
 
   async function confirmarRodada() {
@@ -591,7 +615,16 @@ export default function Dashboard() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          partidas: staging.map((s) => ({ id: s.partida_id, data_agendada: s.data_sugerida })),
+          partidas: staging.map((s) => {
+            const log = stagingLogistica[s.partida_id]
+            return {
+              id: s.partida_id,
+              data_agendada: s.data_sugerida,
+              numero_jogo: log?.numero_jogo ? parseInt(log.numero_jogo, 10) : null,
+              horario: log?.horario || null,
+              local: log?.local || null,
+            }
+          }),
           acao: 'agendar',
         }),
       })
@@ -600,7 +633,9 @@ export default function Dashboard() {
       const confirmados = new Set(staging.map((s) => s.partida_id))
       setSugestoes((prev) => prev.filter((s) => !confirmados.has(s.partida_id)))
       setStaging([])
+      setStagingLogistica({})
       await carregarRodadaOficial()
+      await carregarProximoNumero()
     } catch (e: unknown) {
       setErro(e instanceof Error ? e.message : 'Erro ao confirmar a rodada.')
     } finally {
@@ -622,17 +657,133 @@ export default function Dashboard() {
     }
   }
 
+  // ── Importar helpers ──
+
+  const IMPORT_CONFIG: Record<ImportTipo, { label: string; colunas: string[]; exemplo: string; icon: React.ComponentType<{ className?: string }> }> = {
+    equipes: {
+      label: 'Equipes',
+      icon: Users2,
+      colunas: ['nome', 'chave', 'eh_interior'],
+      exemplo: 'nome,chave,eh_interior\nTime Alpha,A,false\nTime Beta,A,true\nTime Gamma,B,false',
+    },
+    disponibilidades: {
+      label: 'Disponibilidades',
+      icon: CalendarDays,
+      colunas: ['equipe', 'data'],
+      exemplo: 'equipe,data\nTime Alpha,15/02/2026\nTime Beta,22/02/2026',
+    },
+  }
+
+  function detectarCellErrors(tipo: ImportTipo, rows: Record<string, string>[]): Record<string, true> {
+    const erros: Record<string, true> = {}
+    for (const [i, row] of rows.entries()) {
+      if (tipo === 'equipes') {
+        if (!row.nome?.trim()) erros[`${i}:nome`] = true
+      } else {
+        if (!row.equipe?.trim()) erros[`${i}:equipe`] = true
+        if (!row.data?.trim()) erros[`${i}:data`] = true
+        else if (!/^\d{2}\/\d{2}\/\d{4}$/.test(row.data.trim()) && !/^\d{4}-\d{2}-\d{2}$/.test(row.data.trim()))
+          erros[`${i}:data`] = true
+      }
+    }
+    return erros
+  }
+
+  function processarArquivo(file: File, tipo: ImportTipo) {
+    setImportFile(file)
+    setImportResultado(null)
+    Papa.parse<Record<string, string>>(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (result) => {
+        setImportRows(result.data)
+        setImportHeaders(result.meta.fields ?? [])
+        setImportCellErrors(detectarCellErrors(tipo, result.data))
+      },
+    })
+  }
+
+  function handleTipoChange(tipo: ImportTipo) {
+    setImportTipo(tipo)
+    setImportFile(null)
+    setImportRows([])
+    setImportHeaders([])
+    setImportCellErrors({})
+    setImportResultado(null)
+  }
+
+  async function handleImportar() {
+    if (!importFile || !importCampeonatoId || importRows.length === 0) return
+    setIsImportando(true)
+    setImportResultado(null)
+    try {
+      let res: Response
+      if (importTipo === 'disponibilidades') {
+        const fd = new FormData()
+        fd.append('file', importFile)
+        fd.append('campeonato_id', importCampeonatoId)
+        res = await fetch('/api/disponibilidades/importar', { method: 'POST', body: fd })
+      } else {
+        res = await fetch('/api/equipes/importar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            campeonato_id: importCampeonatoId,
+            rows: importRows.map((r) => ({
+              nome: r.nome?.trim(),
+              chave: r.chave?.trim(),
+              eh_interior: r.eh_interior?.trim(),
+            })),
+          }),
+        })
+      }
+      const json = await res.json()
+      setImportResultado(
+        res.ok
+          ? { importados: json.importados ?? 0, erros: json.erros ?? [], partidasGeradas: json.partidas_geradas }
+          : { importados: 0, erros: [json.error ?? 'Erro desconhecido'] }
+      )
+    } catch {
+      setImportResultado({ importados: 0, erros: ['Erro de conexão.'] })
+    } finally {
+      setIsImportando(false)
+    }
+  }
+
   // ── Derived ──
   const gruposSugestoes = agruparPor(sugestoes, (s) => s.campeonato_nome)
-  const gruposRodada    = agruparPor(rodadaOficial, (p) => p.campeonato_nome)
+  const gruposRodada = agruparPor(
+    [...rodadaOficial].sort((a, b) => {
+      const d = ymd(a.data_agendada ?? '').localeCompare(ymd(b.data_agendada ?? ''))
+      if (d !== 0) return d
+      return (a.local ?? '').localeCompare(b.local ?? '')
+    }),
+    (p) => `${ymd(p.data_agendada ?? '')}|${p.local ?? ''}`
+  )
 
-  const partidasFiltradas = searchPool.trim()
-    ? partidasPendentes.filter((p) =>
-        p.equipe_a.nome.toLowerCase().includes(searchPool.toLowerCase()) ||
-        p.equipe_b.nome.toLowerCase().includes(searchPool.toLowerCase())
-      )
-    : partidasPendentes
-  const gruposPool = agruparPor(partidasFiltradas, (p) => p.campeonato_nome)
+  const sortTimes = (g: typeof gruposPool[0]) => ({
+    ...g,
+    times: [...g.times]
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+      .map((t) => ({
+        ...t,
+        adversarios: [...t.adversarios].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+      })),
+  })
+
+  const gruposFiltrados = (searchPool.trim()
+    ? gruposPool
+        .map((g) => ({
+          ...g,
+          times: g.times.filter(
+            (t) =>
+              t.nome.toLowerCase().includes(searchPool.toLowerCase()) ||
+              t.adversarios.some((a) => a.nome.toLowerCase().includes(searchPool.toLowerCase()))
+          ),
+        }))
+        .filter((g) => g.times.length > 0)
+    : gruposPool
+  ).map(sortTimes)
 
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -782,9 +933,8 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* Sidebar */}
+              {/* Sidebar — Box de Montagem */}
               <div className="flex flex-col gap-4">
-                {/* Box de Montagem */}
                 <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
                   <div className="px-4 py-3 border-b border-neutral-800 flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -801,9 +951,58 @@ export default function Dashboard() {
                         <p className="text-neutral-700 text-xs text-center leading-relaxed">Adicione jogos das sugestões<br />para montar a rodada</p>
                       </div>
                     ) : (
-                      staging.map((s) => (
-                        <StagedCard key={s.partida_id} sugestao={s} onRemove={() => removeFromStaging(s.partida_id)} />
-                      ))
+                      staging.map((s) => {
+                        const log = stagingLogistica[s.partida_id] ?? { numero_jogo: '', horario: '', local: '' }
+                        return (
+                          <div key={s.partida_id} className="bg-neutral-800/40 border border-neutral-700/40 rounded-xl p-3 flex flex-col gap-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                <span className="font-black uppercase italic text-white text-xs truncate">{s.equipe_a.nome}</span>
+                                <span className="text-orange-500 font-black text-xs shrink-0">VS</span>
+                                <span className="font-black uppercase italic text-white text-xs truncate">{s.equipe_b.nome}</span>
+                              </div>
+                              <button
+                                onClick={() => removeFromStaging(s.partida_id)}
+                                className="shrink-0 w-6 h-6 flex items-center justify-center rounded-lg text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            <p className="text-neutral-600 text-[10px] px-0.5">{formatarData(s.data_sugerida)} · {s.campeonato_nome}</p>
+                            <div className="grid grid-cols-3 gap-1.5">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest">Nº</label>
+                                <input
+                                  type="number"
+                                  value={log.numero_jogo}
+                                  onChange={(e) => setStagingLogistica((prev) => ({ ...prev, [s.partida_id]: { ...log, numero_jogo: e.target.value } }))}
+                                  className="bg-neutral-900 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-500 w-full"
+                                  placeholder="001"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest">Horário</label>
+                                <input
+                                  type="time"
+                                  value={log.horario}
+                                  onChange={(e) => setStagingLogistica((prev) => ({ ...prev, [s.partida_id]: { ...log, horario: e.target.value } }))}
+                                  className="bg-neutral-900 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-500 w-full"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest">Local</label>
+                                <input
+                                  type="text"
+                                  value={log.local}
+                                  onChange={(e) => setStagingLogistica((prev) => ({ ...prev, [s.partida_id]: { ...log, local: e.target.value } }))}
+                                  className="bg-neutral-900 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-500 w-full"
+                                  placeholder="Quadra..."
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })
                     )}
                   </div>
                   {staging.length > 0 && (
@@ -814,80 +1013,122 @@ export default function Dashboard() {
                         className="w-full bg-orange-500 hover:bg-orange-400 active:bg-orange-600 text-white font-bold py-2.5 rounded-xl transition-all text-sm flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         {isConfirmando ? <Loader2 className="w-4 h-4 animate-spin" /> : <ChevronRight className="w-4 h-4" />}
-                        {isConfirmando ? 'Confirmando...' : `Confirmar no Banco · ${staging.length} jogo${staging.length > 1 ? 's' : ''}`}
+                        {isConfirmando ? 'Confirmando...' : `Confirmar · ${staging.length} jogo${staging.length > 1 ? 's' : ''}`}
                       </button>
                     </div>
                   )}
                 </div>
-
-                {/* Rodada Oficial */}
-                <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-neutral-800 flex items-center gap-2">
-                    <Trophy className="w-4 h-4 text-neutral-600" />
-                    <h3 className="font-bold text-white text-sm">Rodada Oficial</h3>
-                    {rodadaOficial.length > 0 && (
-                      <span className="ml-auto text-[11px] bg-yellow-500/10 text-yellow-500 border border-yellow-500/20 px-2 py-0.5 rounded-full font-semibold">
-                        {rodadaOficial.length} aguardando
-                      </span>
-                    )}
-                  </div>
-                  <div className="max-h-[520px] overflow-y-auto">
-                    {rodadaOficial.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center py-10">
-                        <p className="text-neutral-700 text-xs text-center leading-relaxed">Nenhum jogo confirmado ainda</p>
-                      </div>
-                    ) : (
-                      <div className="p-3 flex flex-col gap-4">
-                        {gruposRodada.map((grupo) => (
-                          <div key={grupo.chave}>
-                            <div className="flex items-center gap-2 mb-2 px-1">
-                              <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest whitespace-nowrap">{grupo.chave}</span>
-                              <div className="flex-1 h-px bg-neutral-800" />
-                            </div>
-                            <div className="flex flex-col gap-1.5">
-                              {grupo.items.map((p) => (
-                                <div
-                                  key={p.id}
-                                  className={`flex items-center gap-2 bg-neutral-800/50 rounded-xl px-3 py-2.5 transition-opacity ${atualizandoIds.has(p.id) ? 'opacity-40' : ''}`}
-                                >
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="font-black uppercase italic text-white text-xs truncate">{p.equipe_a.nome}</span>
-                                      <span className="text-orange-500 font-black text-xs shrink-0">VS</span>
-                                      <span className="font-black uppercase italic text-white text-xs truncate">{p.equipe_b.nome}</span>
-                                    </div>
-                                    {p.data_agendada && (
-                                      <p className="text-neutral-600 text-xs mt-0.5">{formatarData(p.data_agendada)}</p>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-0.5 shrink-0">
-                                    <button
-                                      onClick={() => atualizarStatus(p.id, 'pendente', 'cancelar')}
-                                      disabled={atualizandoIds.has(p.id)}
-                                      title="Cancelar — volta para pendente"
-                                      className="w-7 h-7 flex items-center justify-center rounded-lg text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:cursor-not-allowed"
-                                    >
-                                      <RotateCcw className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      onClick={() => atualizarStatus(p.id, 'realizado', 'realizar')}
-                                      disabled={atualizandoIds.has(p.id)}
-                                      title="Marcar como realizado"
-                                      className="w-7 h-7 flex items-center justify-center rounded-lg text-neutral-600 hover:text-green-400 hover:bg-green-500/10 transition-colors disabled:cursor-not-allowed"
-                                    >
-                                      <CheckCircle2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
+            </div>
+
+            {/* ── Rodada Oficial (full width) ── */}
+            <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-neutral-800 flex items-center gap-2">
+                <Trophy className="w-4 h-4 text-neutral-600" />
+                <h3 className="font-bold text-white text-sm">Rodada Oficial</h3>
+                <button onClick={carregarRodadaOficial} title="Atualizar" className="ml-1 text-neutral-700 hover:text-neutral-400 transition-colors">
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+                {rodadaOficial.length > 0 && (
+                  <span className="ml-auto text-[11px] bg-yellow-500/10 text-yellow-500 border border-yellow-500/20 px-2.5 py-0.5 rounded-full font-semibold">
+                    {rodadaOficial.length} aguardando
+                  </span>
+                )}
+              </div>
+
+              {rodadaOficial.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <p className="text-neutral-700 text-xs text-center">Nenhum jogo confirmado ainda</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-neutral-800/40 border-b border-neutral-800">
+                        <th className="px-5 py-2.5 text-left font-bold text-neutral-600 uppercase tracking-widest w-16">Nº</th>
+                        <th className="px-3 py-2.5 text-left font-bold text-neutral-600 uppercase tracking-widest w-20">Horário</th>
+                        <th className="px-3 py-2.5 text-right font-bold text-neutral-600 uppercase tracking-widest">Time A</th>
+                        <th className="px-3 py-2.5 text-center w-10"></th>
+                        <th className="px-3 py-2.5 text-left font-bold text-neutral-600 uppercase tracking-widest">Time B</th>
+                        <th className="px-3 py-2.5 text-left font-bold text-neutral-600 uppercase tracking-widest">Categoria</th>
+                        <th className="px-5 py-2.5 w-20"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {gruposRodada.flatMap((grupo) => {
+                        const [dataKey, ...localParts] = grupo.chave.split('|')
+                        const localKey = localParts.join('|')
+                        return [
+                          <tr key={`grp-${grupo.chave}`}>
+                            <td colSpan={7} className="px-5 py-2.5 bg-neutral-800/60 border-y border-neutral-800">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-1 h-3.5 rounded-full bg-orange-500 shrink-0" />
+                                <span className="font-black text-white text-xs">
+                                  {dataKey ? `${nomeDiaSemana(dataKey)}, ${formatarDataCurta(dataKey)}` : 'Sem data'}
+                                </span>
+                                {localKey && (
+                                  <span className="flex items-center gap-1 text-neutral-500 text-xs">
+                                    <span className="text-neutral-700 select-none mx-0.5">—</span>
+                                    <MapPin className="w-3 h-3 shrink-0" />
+                                    {localKey}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                          </tr>,
+                          ...grupo.items.map((p, i) => (
+                            <tr
+                              key={p.id}
+                              className={`border-b border-neutral-800/40 transition-opacity ${atualizandoIds.has(p.id) ? 'opacity-40' : ''} ${i % 2 === 1 ? 'bg-neutral-900/50' : ''}`}
+                            >
+                              <td className="px-5 py-3 font-mono font-bold whitespace-nowrap">
+                                {p.numero_jogo != null
+                                  ? <span className="text-orange-400">#{String(p.numero_jogo).padStart(3, '0')}</span>
+                                  : <span className="text-neutral-700">—</span>}
+                              </td>
+                              <td className="px-3 py-3 text-neutral-300 font-mono whitespace-nowrap">
+                                {p.horario ? p.horario.slice(0, 5) : <span className="text-neutral-700">—</span>}
+                              </td>
+                              <td className="px-3 py-3 text-right font-black uppercase italic text-white whitespace-nowrap text-sm">
+                                {p.equipe_a.nome}
+                              </td>
+                              <td className="px-2 py-3 text-center font-black text-orange-500 text-[11px] tracking-widest whitespace-nowrap">
+                                vs
+                              </td>
+                              <td className="px-3 py-3 font-black uppercase italic text-white whitespace-nowrap text-sm">
+                                {p.equipe_b.nome}
+                              </td>
+                              <td className="px-3 py-3 text-neutral-500 whitespace-nowrap">
+                                {p.campeonato_nome}
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="flex items-center justify-end gap-0.5">
+                                  <button
+                                    onClick={() => atualizarStatus(p.id, 'pendente', 'cancelar')}
+                                    disabled={atualizandoIds.has(p.id)}
+                                    title="Cancelar — volta para pendente"
+                                    className="w-7 h-7 flex items-center justify-center rounded-lg text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:cursor-not-allowed"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => atualizarStatus(p.id, 'realizado', 'realizar')}
+                                    disabled={atualizandoIds.has(p.id)}
+                                    title="Marcar como realizado"
+                                    className="w-7 h-7 flex items-center justify-center rounded-lg text-neutral-600 hover:text-green-400 hover:bg-green-500/10 transition-colors disabled:cursor-not-allowed"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          )),
+                        ]
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -908,51 +1149,75 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* Stat cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <StatCard title="Total de Jogos Pendentes"       value={stats.pendentes}       icon={Clock}     color="orange" loading={isLoadingStats} />
-              <StatCard title="Jogos Agendados (Aguardando)"   value={stats.aguardando}      icon={BarChart3} color="yellow" loading={isLoadingStats} />
-              <StatCard title="Categorias Ativas"              value={stats.categoriasAtivas} icon={Trophy}   color="blue"   loading={isLoadingStats} />
-            </div>
-
-            {/* Breakdown table */}
-            {!isLoadingStats && stats.breakdown.length > 0 && (
-              <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
-                <div className="px-5 py-4 border-b border-neutral-800 flex items-center gap-2">
-                  <Activity className="w-4 h-4 text-orange-500" />
-                  <h3 className="font-bold text-white text-sm">Distribuição por Categoria</h3>
-                </div>
-                <div className="divide-y divide-neutral-800/60">
-                  <div className="grid grid-cols-3 px-5 py-2 bg-neutral-800/30">
-                    <span className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest">Categoria</span>
-                    <span className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest text-center">Pendentes</span>
-                    <span className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest text-center">Aguardando</span>
-                  </div>
-                  {stats.breakdown.map((cat) => (
-                    <div key={cat.campeonato_id} className="grid grid-cols-3 px-5 py-3 items-center hover:bg-neutral-800/20 transition-colors">
-                      <span className="font-black italic uppercase text-white text-sm truncate">{cat.nome}</span>
-                      <div className="flex justify-center">
-                        <span className="text-sm font-bold text-orange-400 bg-orange-500/10 border border-orange-500/20 px-3 py-0.5 rounded-full">{cat.pendentes}</span>
-                      </div>
-                      <div className="flex justify-center">
-                        {cat.aguardando > 0 ? (
-                          <span className="text-sm font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 px-3 py-0.5 rounded-full">{cat.aguardando}</span>
-                        ) : (
-                          <span className="text-sm font-semibold text-neutral-700">—</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+            {isLoadingStats ? (
+              <div className="flex flex-col items-center justify-center bg-neutral-900/40 rounded-2xl border border-neutral-800 py-20 gap-3">
+                <Loader2 className="w-7 h-7 text-orange-500 animate-spin" />
+                <p className="text-neutral-500 text-sm font-medium">Calculando estatísticas...</p>
               </div>
-            )}
-
-            {!isLoadingStats && stats.breakdown.length === 0 && (
+            ) : statsVG.length === 0 ? (
               <div className="flex flex-col items-center justify-center bg-neutral-900/20 rounded-2xl border border-dashed border-neutral-800 py-20 gap-3">
                 <div className="w-14 h-14 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center">
                   <Trophy className="w-6 h-6 text-neutral-600" />
                 </div>
-                <p className="text-neutral-500 text-sm font-medium">Nenhuma partida encontrada.</p>
+                <p className="text-neutral-500 text-sm font-medium">Nenhum campeonato com equipes cadastradas.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
+                {statsVG.map((camp) => (
+                  <div key={camp.id} className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
+                    {/* Card header */}
+                    <div className="px-4 py-3 border-b border-neutral-800 flex items-center gap-2.5">
+                      <div className="w-1.5 h-4 rounded-full bg-orange-500 shrink-0" />
+                      <h3 className="font-black italic uppercase text-white text-sm tracking-tight truncate flex-1">
+                        {camp.nome}
+                      </h3>
+                      <span className="text-[10px] font-bold text-neutral-600 shrink-0">
+                        {camp.equipes.length} time{camp.equipes.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+
+                    {/* Column headers */}
+                    <div className="grid grid-cols-[1fr_38px_38px_38px] px-4 py-2 bg-neutral-800/30">
+                      <span className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest">Time</span>
+                      <span className="text-[10px] font-bold text-orange-500/80 uppercase tracking-widest text-center">JP</span>
+                      <span className="text-[10px] font-bold text-yellow-500/80 uppercase tracking-widest text-center">JA</span>
+                      <span className="text-[10px] font-bold text-green-500/80 uppercase tracking-widest text-center">JR</span>
+                    </div>
+
+                    {/* Team rows */}
+                    <div className="divide-y divide-neutral-800/40">
+                      {camp.equipes.map((team) => (
+                        <div key={team.id} className="grid grid-cols-[1fr_38px_38px_38px] px-4 py-2.5 items-center hover:bg-neutral-800/20 transition-colors">
+                          <span className="font-black italic uppercase text-white text-xs truncate pr-2">{team.nome}</span>
+
+                          <div className="flex justify-center">
+                            {team.jp > 0 ? (
+                              <span className="text-[10px] font-bold text-orange-400 bg-orange-500/10 border border-orange-500/20 min-w-[22px] h-[18px] flex items-center justify-center rounded-full px-1">
+                                {team.jp}
+                              </span>
+                            ) : <span className="text-[10px] text-neutral-700 font-semibold block text-center">0</span>}
+                          </div>
+
+                          <div className="flex justify-center">
+                            {team.ja > 0 ? (
+                              <span className="text-[10px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 min-w-[22px] h-[18px] flex items-center justify-center rounded-full px-1">
+                                {team.ja}
+                              </span>
+                            ) : <span className="text-[10px] text-neutral-700 font-semibold block text-center">0</span>}
+                          </div>
+
+                          <div className="flex justify-center">
+                            {team.jr > 0 ? (
+                              <span className="text-[10px] font-bold text-green-400 bg-green-500/10 border border-green-500/20 min-w-[22px] h-[18px] flex items-center justify-center rounded-full px-1">
+                                {team.jr}
+                              </span>
+                            ) : <span className="text-[10px] text-neutral-700 font-semibold block text-center">0</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -974,13 +1239,6 @@ export default function Dashboard() {
                 />
               </div>
               <button
-                onClick={() => setShowImportModal(true)}
-                className="flex items-center gap-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-orange-500/40 text-neutral-300 font-semibold text-sm px-4 py-2.5 rounded-xl transition-colors"
-              >
-                <Upload className="w-4 h-4 text-orange-500" />
-                Importar CSV
-              </button>
-              <button
                 onClick={carregarPool}
                 title="Atualizar"
                 className="w-10 h-10 flex items-center justify-center bg-neutral-900 border border-neutral-800 hover:border-neutral-700 rounded-xl text-neutral-600 hover:text-neutral-300 transition-colors shrink-0"
@@ -989,23 +1247,13 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* Pool count */}
-            {!isLoadingPool && partidasPendentes.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold text-neutral-600 uppercase tracking-widest">
-                  {partidasFiltradas.length} jogo{partidasFiltradas.length !== 1 ? 's' : ''} pendente{partidasFiltradas.length !== 1 ? 's' : ''}
-                  {searchPool && ` · filtrado por "${searchPool}"`}
-                </span>
-              </div>
-            )}
-
             {/* Content */}
             {isLoadingPool ? (
               <div className="flex flex-col items-center justify-center bg-neutral-900/40 rounded-2xl border border-neutral-800 py-20 gap-3">
                 <Loader2 className="w-7 h-7 text-orange-500 animate-spin" />
-                <p className="text-neutral-500 text-sm font-medium">Carregando partidas pendentes...</p>
+                <p className="text-neutral-500 text-sm font-medium">Carregando confrontos...</p>
               </div>
-            ) : partidasFiltradas.length === 0 ? (
+            ) : gruposFiltrados.length === 0 ? (
               <div className="flex flex-col items-center justify-center bg-neutral-900/20 rounded-2xl border border-dashed border-neutral-800 py-20 gap-3">
                 <div className="w-14 h-14 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center">
                   <Layers className="w-6 h-6 text-neutral-600" />
@@ -1013,39 +1261,49 @@ export default function Dashboard() {
                 <p className="text-neutral-500 text-sm font-medium text-center max-w-xs leading-relaxed">
                   {searchPool
                     ? `Nenhuma equipe encontrada para "${searchPool}"`
-                    : 'Nenhuma partida pendente no momento.'}
+                    : 'Nenhum jogo pendente no momento.'}
                 </p>
               </div>
             ) : (
-              <div className="flex flex-col gap-6">
-                {gruposPool.map((grupo) => (
-                  <div key={grupo.chave} className="flex flex-col gap-3">
+              <div className="flex flex-col gap-8">
+                {gruposFiltrados.map((grupo) => (
+                  <div key={grupo.campeonato_id} className="flex flex-col gap-3">
                     {/* Category header */}
                     <div className="flex items-center gap-3">
                       <span className="text-[11px] font-black text-orange-400 uppercase tracking-widest whitespace-nowrap">
-                        {grupo.chave}
+                        {grupo.campeonato_nome}
                       </span>
                       <div className="flex-1 h-px bg-orange-400/25" />
-                      <span className="text-[11px] text-orange-400/60 font-semibold shrink-0">
-                        {grupo.items.length} jogo{grupo.items.length > 1 ? 's' : ''}
+                      <span className="text-[11px] text-orange-400/70 font-bold shrink-0 bg-orange-500/10 border border-orange-500/20 px-2.5 py-0.5 rounded-full">
+                        {grupo.total_pendentes} restante{grupo.total_pendentes !== 1 ? 's' : ''}
                       </span>
                     </div>
 
-                    {/* Partidas */}
-                    <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
-                      {grupo.items.map((partida, idx) => (
-                        <div
-                          key={partida.id}
-                          className={`flex items-center gap-3 px-4 py-3 ${idx > 0 ? 'border-t border-neutral-800/60' : ''}`}
-                        >
-                          <div className="flex-1 min-w-0 flex items-center gap-2">
-                            <span className="font-black uppercase italic text-white text-sm truncate">{partida.equipe_a.nome}</span>
-                            <span className="text-orange-500 font-black text-xs shrink-0">VS</span>
-                            <span className="font-black uppercase italic text-white text-sm truncate">{partida.equipe_b.nome}</span>
-                          </div>
-                          <span className="text-[11px] text-neutral-600 font-semibold shrink-0 bg-neutral-800 px-2 py-0.5 rounded-full">
-                            Chave {partida.equipe_a.chave}
+                    {/* Teams list */}
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden divide-y divide-neutral-800/60">
+                      {grupo.times.map((time) => (
+                        <div key={time.id} className="flex items-center gap-4 px-5 py-3 min-w-0 hover:bg-neutral-800/20 transition-colors">
+                          {/* Team name */}
+                          <span className="font-black italic uppercase text-white text-sm w-[160px] shrink-0 truncate">
+                            {time.nome}
                           </span>
+
+                          {/* VS */}
+                          <span className="text-orange-500 font-black text-[11px] tracking-widest shrink-0">vs</span>
+
+                          {/* Opponents */}
+                          <div className="flex items-center flex-wrap gap-y-1 min-w-0">
+                            {time.adversarios.map((adv, i) => (
+                              <div key={adv.partida_id} className="flex items-center">
+                                {i > 0 && (
+                                  <span className="text-[10px] text-neutral-700 px-1 select-none leading-none">|</span>
+                                )}
+                                <span className="font-bold italic uppercase text-[11px] text-neutral-400 whitespace-nowrap px-0.5 tracking-wide">
+                                  {adv.nome}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1055,6 +1313,223 @@ export default function Dashboard() {
             )}
           </div>
         )}
+
+        {/* ════════════════════════ IMPORTAR ════════════════════════ */}
+        {activeTab === 'importar' && (() => {
+          const cfg = IMPORT_CONFIG[importTipo]
+          const totalErrors = Object.keys(importCellErrors).length
+          const rowsComErro = new Set(Object.keys(importCellErrors).map((k) => k.split(':')[0]))
+          const canConfirm = !!importFile && !!importCampeonatoId && importRows.length > 0 && !isImportando
+
+          return (
+            <div className="flex flex-col gap-6">
+              <h2 className="font-black italic uppercase text-white text-base tracking-tight">
+                Importar <span className="text-orange-500">Dados</span>
+              </h2>
+
+              {/* Step 1 — Tipo */}
+              <div className="flex flex-col gap-2">
+                <label className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest">Tipo de dado</label>
+                <div className="flex gap-2 flex-wrap">
+                  {(Object.entries(IMPORT_CONFIG) as [ImportTipo, typeof cfg][]).map(([id, c]) => {
+                    const Icon = c.icon
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => handleTipoChange(id)}
+                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all border ${
+                          importTipo === id
+                            ? 'bg-orange-500/15 border-orange-500/40 text-orange-400'
+                            : 'bg-neutral-900 border-neutral-800 text-neutral-500 hover:text-neutral-300 hover:border-neutral-700'
+                        }`}
+                      >
+                        <Icon className="w-4 h-4" />
+                        {c.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Step 2 — Campeonato */}
+              <div className="flex flex-col gap-2">
+                <label className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest">Campeonato / Categoria</label>
+                <select
+                  value={importCampeonatoId}
+                  onChange={(e) => setImportCampeonatoId(e.target.value)}
+                  className="bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 transition-colors max-w-sm"
+                >
+                  <option value="">Selecione o campeonato...</option>
+                  {campeonatos.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                </select>
+              </div>
+
+              {/* Step 3 — Drop zone */}
+              <div className="flex flex-col gap-3">
+                <label className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest">Arquivo CSV</label>
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
+                  onDragEnter={() => setIsDragging(true)}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    setIsDragging(false)
+                    const f = e.dataTransfer.files[0]
+                    if (f) processarArquivo(f, importTipo)
+                  }}
+                  onClick={() => importFileRef.current?.click()}
+                  className={`relative cursor-pointer rounded-2xl border-2 border-dashed p-10 flex flex-col items-center gap-4 transition-all select-none ${
+                    isDragging
+                      ? 'border-orange-500 bg-orange-500/5'
+                      : importFile
+                      ? 'border-orange-500/40 bg-orange-500/5'
+                      : 'border-neutral-700 hover:border-orange-500/50 hover:bg-neutral-900/40'
+                  }`}
+                >
+                  <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-colors ${
+                    isDragging || importFile ? 'bg-orange-500/20' : 'bg-neutral-800'
+                  }`}>
+                    <Upload className={`w-7 h-7 transition-colors ${isDragging || importFile ? 'text-orange-400' : 'text-neutral-500'}`} />
+                  </div>
+                  {importFile ? (
+                    <div className="text-center">
+                      <p className="font-bold text-white text-sm">{importFile.name}</p>
+                      <p className="text-neutral-500 text-xs mt-1">
+                        {(importFile.size / 1024).toFixed(1)} KB · {importRows.length} linha{importRows.length !== 1 ? 's' : ''}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <p className="text-sm font-semibold text-neutral-300">Arraste um arquivo CSV ou clique para selecionar</p>
+                      <p className="text-xs text-neutral-600 mt-1">
+                        Colunas esperadas: <span className="font-mono text-neutral-500">{cfg.colunas.join(', ')}</span>
+                      </p>
+                    </div>
+                  )}
+                  {importFile && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setImportFile(null); setImportRows([]); setImportHeaders([]); setImportCellErrors({}); setImportResultado(null) }}
+                      className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-lg text-neutral-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) processarArquivo(f, importTipo); e.target.value = '' }}
+                />
+
+                {/* Format hint */}
+                <div className="bg-neutral-900/60 border border-neutral-800/60 rounded-xl px-4 py-3">
+                  <p className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest mb-2">Formato esperado</p>
+                  <pre className="text-xs text-neutral-400 font-mono leading-relaxed whitespace-pre-wrap">{cfg.exemplo}</pre>
+                </div>
+              </div>
+
+              {/* Step 4 — Preview table */}
+              {importRows.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest">
+                      Prévia dos dados
+                    </label>
+                    {totalErrors > 0 && (
+                      <span className="text-[11px] font-bold text-red-400 bg-red-500/10 border border-red-500/20 px-2.5 py-0.5 rounded-full">
+                        {rowsComErro.size} linha{rowsComErro.size !== 1 ? 's' : ''} com erro
+                      </span>
+                    )}
+                    {totalErrors === 0 && (
+                      <span className="text-[11px] font-bold text-green-400 bg-green-500/10 border border-green-500/20 px-2.5 py-0.5 rounded-full">
+                        Dados válidos ✓
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="overflow-auto rounded-xl border border-neutral-800 max-h-72">
+                    <table className="w-full text-xs border-collapse min-w-max">
+                      <thead>
+                        <tr className="bg-neutral-800/60 sticky top-0">
+                          <th className="px-3 py-2.5 text-left font-bold text-neutral-500 uppercase tracking-widest border-b border-neutral-700 w-10">#</th>
+                          {importHeaders.map((h) => (
+                            <th key={h} className="px-3 py-2.5 text-left font-bold text-neutral-400 uppercase tracking-widest border-b border-neutral-700 whitespace-nowrap">
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importRows.slice(0, 200).map((row, i) => (
+                          <tr key={i} className={`${rowsComErro.has(String(i)) ? 'bg-red-500/5' : i % 2 === 0 ? 'bg-neutral-900/60' : 'bg-neutral-950/60'}`}>
+                            <td className="px-3 py-2 text-neutral-600 font-mono border-b border-neutral-800/40">{i + 1}</td>
+                            {importHeaders.map((h) => {
+                              const hasErr = importCellErrors[`${i}:${h}`]
+                              return (
+                                <td key={h} className={`px-3 py-2 border-b border-neutral-800/40 font-mono whitespace-nowrap ${hasErr ? 'text-red-400 bg-red-500/15' : 'text-neutral-300'}`}>
+                                  {row[h] || <span className="text-neutral-700">—</span>}
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {importRows.length > 200 && (
+                    <p className="text-xs text-neutral-600 text-center">
+                      Exibindo 200 de {importRows.length} linhas.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Result */}
+              {importResultado && (
+                <div className={`rounded-xl p-4 text-sm flex flex-col gap-2 ${
+                  importResultado.importados > 0
+                    ? 'bg-green-500/10 border border-green-500/20'
+                    : 'bg-red-500/10 border border-red-500/20'
+                }`}>
+                  {importResultado.importados > 0 && (
+                    <p className="font-bold text-green-400">
+                      {importResultado.importados} equipe{importResultado.importados !== 1 ? 's' : ''} importada{importResultado.importados !== 1 ? 's' : ''} com sucesso!
+                      {importTipo === 'equipes' && importResultado.partidasGeradas !== undefined && (
+                        importResultado.partidasGeradas > 0
+                          ? ` ${importResultado.partidasGeradas} confronto${importResultado.partidasGeradas !== 1 ? 's' : ''} gerado${importResultado.partidasGeradas !== 1 ? 's' : ''} no Pool de Jogos.`
+                          : ' (nenhum confronto novo gerado — já existiam partidas para este campeonato)'
+                      )}
+                    </p>
+                  )}
+                  {importResultado.erros.length > 0 && (
+                    <ul className="flex flex-col gap-1">
+                      {importResultado.erros.map((e, i) => (
+                        <li key={i} className="text-xs text-yellow-400 flex items-start gap-1.5">
+                          <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                          {e}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {/* Confirm button */}
+              <div className="flex justify-end">
+                <button
+                  onClick={handleImportar}
+                  disabled={!canConfirm}
+                  className="flex items-center gap-2 bg-orange-500 hover:bg-orange-400 active:bg-orange-600 text-white font-bold px-6 py-2.5 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm shadow-lg shadow-orange-500/20"
+                >
+                  {isImportando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+                  {isImportando ? 'Importando...' : 'Confirmar Importação'}
+                </button>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* ════════════════════════ LOGS ════════════════════════ */}
         {activeTab === 'logs' && (
