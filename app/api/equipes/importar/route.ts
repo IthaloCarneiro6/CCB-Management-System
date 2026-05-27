@@ -55,8 +55,9 @@ export async function POST(request: Request) {
   const novasPartidas: { campeonato_id: string; equipe_a_id: string; equipe_b_id: string; status: 'pendente' }[] = []
 
   const addPair = (a: string, b: string) => {
-    const key = [a, b].sort().join('|')
-    if (!existingSet.has(key)) { existingSet.add(key); novasPartidas.push({ campeonato_id, equipe_a_id: a, equipe_b_id: b, status: 'pendente' }) }
+    const [aId, bId] = [a, b].sort()
+    const key = `${aId}|${bId}`
+    if (!existingSet.has(key)) { existingSet.add(key); novasPartidas.push({ campeonato_id, equipe_a_id: aId, equipe_b_id: bId, status: 'pendente' }) }
   }
 
   if (formato_chaves) {

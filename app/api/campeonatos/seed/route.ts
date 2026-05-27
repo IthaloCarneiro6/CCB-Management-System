@@ -57,24 +57,16 @@ export async function POST(request: Request) {
     for (const times of Object.values(grupos)) {
       for (let i = 0; i < times.length; i++) {
         for (let j = i + 1; j < times.length; j++) {
-          novasPartidas.push({
-            campeonato_id,
-            equipe_a_id: times[i].id,
-            equipe_b_id: times[j].id,
-            status: 'pendente',
-          })
+          const [aId, bId] = [times[i].id, times[j].id].sort()
+          novasPartidas.push({ campeonato_id, equipe_a_id: aId, equipe_b_id: bId, status: 'pendente' })
         }
       }
     }
   } else {
     for (let i = 0; i < equipes.length; i++) {
       for (let j = i + 1; j < equipes.length; j++) {
-        novasPartidas.push({
-          campeonato_id,
-          equipe_a_id: equipes[i].id,
-          equipe_b_id: equipes[j].id,
-          status: 'pendente',
-        })
+        const [aId, bId] = [equipes[i].id, equipes[j].id].sort()
+        novasPartidas.push({ campeonato_id, equipe_a_id: aId, equipe_b_id: bId, status: 'pendente' })
       }
     }
   }

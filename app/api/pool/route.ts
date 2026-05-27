@@ -35,13 +35,17 @@ export async function GET() {
       }
       for (const g of Object.values(grupos)) {
         for (let i = 0; i < g.length; i++)
-          for (let j = i + 1; j < g.length; j++)
-            novas.push({ campeonato_id: camp.id, equipe_a_id: g[i].id, equipe_b_id: g[j].id, status: 'pendente' })
+          for (let j = i + 1; j < g.length; j++) {
+            const [aId, bId] = [g[i].id, g[j].id].sort()
+            novas.push({ campeonato_id: camp.id, equipe_a_id: aId, equipe_b_id: bId, status: 'pendente' })
+          }
       }
     } else {
       for (let i = 0; i < times.length; i++)
-        for (let j = i + 1; j < times.length; j++)
-          novas.push({ campeonato_id: camp.id, equipe_a_id: times[i].id, equipe_b_id: times[j].id, status: 'pendente' })
+        for (let j = i + 1; j < times.length; j++) {
+          const [aId, bId] = [times[i].id, times[j].id].sort()
+          novas.push({ campeonato_id: camp.id, equipe_a_id: aId, equipe_b_id: bId, status: 'pendente' })
+        }
     }
   }
 
@@ -61,30 +65,23 @@ export async function GET() {
   const pending = (raw ?? []) as unknown as RawPartida[]
   const campNome = new Map(campeonatos.map((c) => [c.id, c.nome]))
 
-  // Build per-campeonato, per-team structure
-  const gruposMap = new Map<
-    string,
-    Map<string, { id: string; nome: string; chave: string; adversarios: { partida_id: string; nome: string }[] }>
-  >()
+  // Build flat list of partidas per campeonato
+  const gruposMap = new Map<string, { id: string; equipe_a: { id: string; nome: string }; equipe_b: { id: string; nome: string } }[]>()
 
   for (const p of pending) {
-    if (!gruposMap.has(p.campeonato_id)) gruposMap.set(p.campeonato_id, new Map())
-    const m = gruposMap.get(p.campeonato_id)!
-
-    if (!m.has(p.equipe_a.id))
-      m.set(p.equipe_a.id, { id: p.equipe_a.id, nome: p.equipe_a.nome, chave: p.equipe_a.chave, adversarios: [] })
-    m.get(p.equipe_a.id)!.adversarios.push({ partida_id: p.id, nome: p.equipe_b.nome })
-
-    if (!m.has(p.equipe_b.id))
-      m.set(p.equipe_b.id, { id: p.equipe_b.id, nome: p.equipe_b.nome, chave: p.equipe_b.chave, adversarios: [] })
-    m.get(p.equipe_b.id)!.adversarios.push({ partida_id: p.id, nome: p.equipe_a.nome })
+    if (!gruposMap.has(p.campeonato_id)) gruposMap.set(p.campeonato_id, [])
+    gruposMap.get(p.campeonato_id)!.push({
+      id: p.id,
+      equipe_a: { id: p.equipe_a.id, nome: p.equipe_a.nome },
+      equipe_b: { id: p.equipe_b.id, nome: p.equipe_b.nome },
+    })
   }
 
-  const grupos = Array.from(gruposMap.entries()).map(([campeonato_id, m]) => ({
+  const grupos = Array.from(gruposMap.entries()).map(([campeonato_id, partidas]) => ({
     campeonato_id,
     campeonato_nome: campNome.get(campeonato_id) ?? campeonato_id,
-    total_pendentes: Math.round(Array.from(m.values()).reduce((s, t) => s + t.adversarios.length, 0) / 2),
-    times: Array.from(m.values()),
+    total_pendentes: partidas.length,
+    partidas: [...partidas].sort((a, b) => a.equipe_a.nome.localeCompare(b.equipe_a.nome, 'pt-BR')),
   }))
 
   return Response.json({ grupos })

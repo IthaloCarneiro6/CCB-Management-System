@@ -6,6 +6,8 @@ type PartidaInput = {
   numero_jogo?: number | null
   horario?: string | null
   local?: string | null
+  equipe_a_id?: string | null
+  equipe_b_id?: string | null
 }
 
 export async function POST(request: Request) {
@@ -26,6 +28,8 @@ export async function POST(request: Request) {
         .update({
           status: 'aguardando',
           data_agendada: p.data_agendada,
+          ...(p.equipe_a_id != null && { equipe_a_id: p.equipe_a_id }),
+          ...(p.equipe_b_id != null && { equipe_b_id: p.equipe_b_id }),
           ...(p.numero_jogo != null && { numero_jogo: p.numero_jogo }),
           ...(p.horario != null && { horario: p.horario }),
           ...(p.local != null && { local: p.local }),
@@ -48,7 +52,8 @@ export async function POST(request: Request) {
     batch_id,
   }))
 
-  const { error: logError } = await supabase.from('logs_transacoes').insert(logs)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: logError } = await supabase.from('logs_transacoes').insert(logs as any)
   if (logError) return Response.json({ error: logError.message }, { status: 500 })
 
   return Response.json({ sucesso: true, batch_id, confirmadas: partidas.length })

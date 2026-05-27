@@ -18,6 +18,7 @@ Sistema interno Next.js para o gestor da CCB organizar rodadas de basquete de fi
 | Estilização | Tailwind CSS v4 — dark UI `#050505`, accent `orange-500` |
 | Tipagem | TypeScript strict |
 | CSV | PapaParse 5.5.3 (client-side) |
+| Estado global | Zustand 5 (usado no `stores/useToastStore.ts`) |
 
 ---
 
@@ -28,31 +29,22 @@ campeonatos
   id, nome, formato_chaves (boolean)
 
 equipes
-  id, campeonato_id, nome, chave ('A'/'B'/'Unica'), eh_interior (boolean)
+  id, campeonato_id, nome, chave (sempre 'Unica'), eh_interior (boolean)
 
 partidas
   id, campeonato_id, equipe_a_id, equipe_b_id
   status ('pendente' | 'aguardando' | 'realizado')
-  data_agendada (timestamp — vem como "2025-05-10T00:00:00", não só data)
-  numero_jogo (INTEGER) 
-  horario (TEXT)          
-  local (TEXT)           
+  data_agendada (timestamp — vem como "2025-05-10T00:00:00", nunca só data)
+  numero_jogo (INTEGER)
+  horario (TEXT)
+  local (TEXT)
 
 disponibilidades
-  id, equipe (TEXT), campeonato_id, data
+  id, equipe_id, data, observacao TEXT NULL
+  (UNIQUE constraint em equipe_id, data)
 
 logs_transacoes
-  id, partida_id, acao, status_anterior, status_novo, batch_id, created_at
-```
-
-### ⚠️ Migration obrigatória (ainda não aplicada no Supabase)
-
-Rodar no SQL Editor do Supabase antes de usar a Rodada Oficial completa:
-
-```sql
-ALTER TABLE partidas ADD COLUMN numero_jogo INTEGER;
-ALTER TABLE partidas ADD COLUMN horario TEXT;
-ALTER TABLE partidas ADD COLUMN local TEXT;
+  id, partida_id, acao, status_anterior, status_novo, batch_id, created_at, payload (JSONB)
 ```
 
 ### Fluxo de status
@@ -67,63 +59,107 @@ pendente → aguardando → realizado
 
 - `true` → round-robin só dentro da mesma chave (A×A, B×B)
 - `false` → round-robin geral (todos contra todos)
+- Novos campeonatos criados via UI sempre usam `false`
 
 ---
 
 ## 4. Estrutura de Arquivos
 
-### Frontend
+### Raiz do projeto
 
 ```
-app/page.tsx          (~1550 linhas) — componente cliente monolítico, toda a UI
+middleware.ts                 — proteção de rotas (redireciona para /login se sem sessão)
+lib/
+  supabase.ts                 — cliente Supabase
+  types.ts                    — todos os tipos compartilhados (Tab, Sugestao, PartidaOficial, etc.)
+  date-helpers.ts             — ymd, formatarData, formatarDataCurta, formatarDataHora, nomeDiaSemana, agruparPor
+  class-helpers.tsx           — labelClasses, LabelIcon, statusBadgeClasses, acaoClasses, acaoLabel, statusLabel
+stores/
+  useToastStore.ts            — Zustand: push(type, message), remove(id), auto-remoção 4s
+components/
+  AppHeader.tsx               — header sticky + nav tabs + botão logout (responsivo)
+  StatCard.tsx                — card JP/JA/JR
+  SugestaoCard.tsx            — card de sugestão (linha única)
+  ui/
+    Toast.tsx                 — ToastContainer (renderiza toasts do store)
+  planejar/
+    PlanejamentoView.tsx      — aba Planejar completa (owns all state)
+    BoxMontagem.tsx           — staging de jogos com campos Nº/Horário/Local + swap
+    ObservacoesBox.tsx        — caixa de observações das disponibilidades
+    RodadaOficial.tsx         — tabela da rodada com edição inline + confirmação antes de undo/realizado
+  pool/
+    PoolView.tsx              — cascata por time pivô + filtro por campeonato + busca
+  visao-geral/
+    VisaoGeralView.tsx        — cards JP/JA/JR por campeonato + filtro
+  importar/
+    ImportarView.tsx          — upload CSV com preview + drag-and-drop
+    NovoCampeonatoModal.tsx   — modal de criação de campeonato
+  logs/
+    LogsView.tsx              — logs paginados (50 por vez, botão carregar mais)
 ```
 
-**Abas (type Tab):**
-```
-planejar    → Matchmaking + Box de Montagem + Rodada Oficial
-visao-geral → Cards JP/JA/JR por campeonato
-pool        → Confrontos pendentes agrupados por time
-importar    → Upload CSV (equipes, disponibilidades)
-logs        → Histórico de transações
-```
-
-### Backend (APIs)
+### App (Next.js)
 
 ```
-app/api/
-  matchmaking/route.ts          POST — sugestões por disponibilidade mútua + score
-  pool/route.ts                 GET  — pendentes agrupados por time; auto-gera round-robin
-  partidas/
-    confirmar/route.ts          POST — pendente→aguardando, salva numero_jogo/horario/local
-    atualizar-status/route.ts   POST — aguardando→pendente (undo) ou →realizado
-    importar/route.ts           POST — importa confrontos por nome de equipe
-  equipes/importar/route.ts     POST — importa equipes + diff de round-robin
-  disponibilidades/importar/    POST FormData — importa disponibilidades CSV
-  campeonatos/seed/route.ts     POST — gera round-robin completo (409 se já existir)
+app/
+  page.tsx                    — shell (~58 linhas): monta Header + views + ToastContainer
+  layout.tsx                  — root layout com fonte Geist
+  globals.css                 — estilos globais + print CSS (dark mode forçado)
+  login/
+    page.tsx                  — página de login (client component)
+  api/
+    auth/
+      login/route.ts          — POST: valida credenciais, seta cookie httpOnly 7 dias
+      logout/route.ts         — POST: apaga cookie
+    matchmaking/route.ts      — POST: sugestões por disponibilidade mútua + score
+    pool/
+      route.ts                — GET: pendentes agrupados; auto-gera round-robin se vazio
+      limpar-duplicatas/      — POST: remove pares duplicados
+    partidas/
+      confirmar/route.ts      — POST: pendente→aguardando com campos logísticos
+      atualizar-status/       — POST: aguardando→pendente (undo) ou →realizado
+      importar/               — POST: importa confrontos por nome de equipe
+    equipes/importar/         — POST: importa equipes + diff round-robin + log
+    disponibilidades/importar/— POST FormData: CSV disponibilidades + log
+    campeonatos/
+      route.ts                — GET: lista campeonatos
+      seed/route.ts           — POST: gera round-robin completo (409 se já existir)
 ```
+
+**CRÍTICO — alias `@/`:** mapeia para a **raiz do projeto** (`./*`), confirmado em `tsconfig.json`: `"paths": { "@/*": ["./*"] }`. `lib/`, `stores/`, `components/` ficam na raiz, não dentro de `app/`.
 
 ---
 
-## 5. Tipos Principais (`app/page.tsx`)
+## 5. Tipos Principais (`lib/types.ts`)
 
 ```typescript
+type Tab = 'planejar' | 'visao-geral' | 'pool' | 'logs' | 'importar'
+type ImportTipo = 'equipes' | 'disponibilidades'
+
 type PartidaOficial = {
-  id: string
-  campeonato_id: string
-  campeonato_nome: string
+  id: string; campeonato_id: string; campeonato_nome: string
   data_agendada: string | null    // timestamp — sempre usar ymd() para formatar
   numero_jogo: number | null
-  horario: string | null          // formato HH:mm
-  local: string | null
-  equipe_a: { nome: string }
-  equipe_b: { nome: string }
+  horario: string | null; local: string | null
+  equipe_a: { id: string; nome: string }   // id necessário para swap inline
+  equipe_b: { id: string; nome: string }
 }
 
-type GrupoPool    = { campeonato_id, campeonato_nome, total_pendentes, times: TimePool[] }
-type TimePool     = { id, nome, chave, adversarios: Adversario[] }
-type Adversario   = { partida_id, nome }
-type CampeonatoVG = { id, nome, equipes: EquipeStats[] }
-type EquipeStats  = { id, nome, jp, ja, jr }
+type LogTransacao = {
+  id: string; partida_id: string | null; acao: string
+  status_anterior: string | null; status_novo: string | null
+  batch_id: string | null; created_at: string
+  payload: Record<string, unknown> | null
+  partida: { equipe_a: { nome: string }; equipe_b: { nome: string } } | null
+}
+
+type PartidaPool      = { id: string; equipe_a: { id: string; nome: string }; equipe_b: { id: string; nome: string } }
+type GrupoPool        = { campeonato_id: string; campeonato_nome: string; total_pendentes: number; partidas: PartidaPool[] }
+type BlocoPool        = { pivotId: string; pivotNome: string; count: number; partidas: PartidaPool[] }
+type GrupoPoolAgrupado = { campeonato_id: string; campeonato_nome: string; total_pendentes: number; blocos: BlocoPool[] }
+type CampeonatoVG   = { id: string; nome: string; equipes: EquipeStats[] }
+type EquipeStats    = { id: string; nome: string; jp: number; ja: number; jr: number }
+type ObservacaoDisp = { equipe_nome: string; observacao: string }
 ```
 
 ---
@@ -133,103 +169,137 @@ type EquipeStats  = { id, nome, jp, ja, jr }
 O campo `data_agendada` vem do banco com hora (`2025-05-10T00:00:00`). **Nunca** fazer `split('-')` diretamente.
 
 ```typescript
+// lib/date-helpers.ts
 function ymd(iso: string): string       // .slice(0, 10) — normaliza timestamps
 function formatarData(iso)              // DD/MM/YYYY
 function formatarDataCurta(iso)         // DD/MM
+function formatarDataHora(iso)          // DD/MM/AA HH:mm
 function nomeDiaSemana(iso)             // "Sábado", "Domingo"... — usa ymd() internamente
+function agruparPor<T>(items, getKey)   // agrupamento genérico em Map
 ```
-
-Todos passam por `ymd()` antes de qualquer operação.
 
 ---
 
-## 7. Fluxos Principais
+## 7. Autenticação
+
+Credenciais únicas para toda a equipe — armazenadas em `.env.local` (nunca no git).
+
+```
+AUTH_USERNAME=gestor
+AUTH_PASSWORD=ccb2026          ← alterar antes do deploy
+AUTH_SECRET=<hex-64-chars>     ← token de sessão; não exposto ao cliente
+```
+
+**Fluxo:**
+1. `GET /` sem cookie → middleware redireciona para `/login`
+2. `POST /api/auth/login` com credenciais → seta cookie `ccb_session` (httpOnly, secure em prod, 7 dias)
+3. Middleware lê cookie e compara com `AUTH_SECRET` — qualquer divergência → redirect `/login`
+4. `POST /api/auth/logout` → apaga cookie → próxima requisição vai para `/login`
+
+**Rotas públicas** (middleware não protege): `/login`, `/api/auth/*`
+
+---
+
+## 8. Fluxos Principais
 
 ### A. Planejar Rodada
 
 1. Usuário informa datas → `POST /api/matchmaking` → sugestões por categoria
-2. Clica "Adicionar" → jogo entra no **Box de Montagem** com `numero_jogo` pré-preenchido
-3. Preenche Nº / Horário / Local por jogo no próprio Box
-4. "Confirmar" → `POST /api/partidas/confirmar` → `pendente→aguardando` com campos logísticos
-5. Jogo aparece na **Rodada Oficial** (tabela full-width abaixo do grid)
+2. Clica `+` → jogo entra no **Box de Montagem** com `numero_jogo` pré-preenchido e `local: 'Juvenal de Carvalho'`
+3. Preenche/ajusta Nº / Horário / Local
+4. "Confirmar" → `POST /api/partidas/confirmar` → `pendente→aguardando`
+5. Jogo aparece na **Rodada Oficial** (tabela full-width)
 
 ### B. Rodada Oficial
 
 - Agrupada por `(data_agendada, local)` — chave `"YYYY-MM-DD|Local"`
-- Cabeçalho: `"Sábado, 09/05 — Quadra Central"` (barra laranja + texto branco)
+- Cabeçalho: `"Sábado, 09/05 — Quadra Central"` (barra laranja)
 - Colunas: `Nº (#001) | HH:mm | TIME A | vs | TIME B | Categoria | Ações`
-- Zebra striping dentro de cada grupo
+- **Undo** e **Marcar realizado** exigem confirmação inline ("Desfazer? Sim/Não" / "Realizado? Sim/Não")
 - Undo → `POST /api/partidas/atualizar-status` → limpa numero_jogo/horario/local/data_agendada
 
-### C. Próximo Número de Jogo
+### C. Próximo Número de Jogo (LÓGICA CORRIGIDA)
 
 ```typescript
-// Busca MAX(numero_jogo) só em partidas NÃO pendentes
-supabase.from('partidas')
-  .select('numero_jogo')
-  .not('numero_jogo', 'is', null)
-  .neq('status', 'pendente')          // ← exclui jogos desfeitos
-  .order('numero_jogo', { ascending: false })
-  .limit(1)
-// resultado: MAX + 1  (se todos desfeitos → MAX=0 → sugere #1)
+// Busca TODOS os numero_jogo de partidas não-pendentes,
+// depois encontra o MENOR inteiro positivo não utilizado.
+// Isso garante que slots liberados por undo sejam reutilizados.
+const usados = new Set(data.map(r => r.numero_jogo))
+let proximo = 1
+while (usados.has(proximo)) proximo++
 ```
 
-### D. Pool de Jogos (`GET /api/pool`)
+### D. Pool de Jogos
 
-- Se campeonato tem equipes mas zero partidas → auto-gera round-robin
-- Retorna times ordenados por `localeCompare('pt-BR')` com adversários pendentes
+- Auto-gera round-robin se campeonato tem equipes mas zero partidas
+- Frontend agrupa por `equipe_a.id` (blocos), ordena desc por count
+- Filtro por campeonato (dropdown) + busca por equipe
+- `/api/pool/limpar-duplicatas` remove pares duplicados
 
-### E. Importar Equipes (`POST /api/equipes/importar`)
+### E. Importar Equipes
 
-- Insere equipes novas (ignora duplicatas por nome)
-- Executa diff de round-robin: só insere pares que não existem
-- Retorna `{ importados, partidas_geradas, erros }`
+- CSV: `nome,eh_interior` (coluna `chave` removida — inserida sempre como `'Unica'`)
+- Diff de round-robin com `[a,b].sort().join('|')`
+- Log `IMPORT_EQUIPES`
+
+### F. Importar Disponibilidades
+
+1. **Google Forms**: detecta por header `Qual sua equipe ?`
+2. **Formato legado**: colunas `equipe`, `data`
+- Upsert com `ignoreDuplicates: true`
+- Log `IMPORT_DISPONIBILIDADES`
+
+### G. Logs
+
+- Grid 5 colunas: Partida | Ação | Status Anterior | Status Atual | Quando
+- Paginado: 50 por vez + botão "Carregar mais" (`.range()` no Supabase)
 
 ---
 
-## 8. Padrões Técnicos
+## 9. UX — Toast System
+
+```typescript
+// stores/useToastStore.ts
+const { push } = useToastStore()
+push('success', 'Mensagem')   // verde — auto-remove em 4s
+push('error', 'Mensagem')     // vermelho
+push('info', 'Mensagem')      // azul
+```
+
+Substituiu inline `setErro` e `setImportResultado`. `<ToastContainer />` renderizado em `app/page.tsx`.
+
+---
+
+## 10. Padrões Técnicos
 
 | Padrão | Motivo |
 |---|---|
-| `as any` em `.update()` do Supabase | Colunas da migration pendente não estão nos tipos gerados |
+| `as any` em `.update()` do Supabase | Tipos gerados desatualizados — remover após `supabase gen types` |
 | `flatMap` em `<tbody>` em vez de `React.Fragment` com key | New JSX transform ativo — React não está importado |
-| `[a,b].sort().join('|')` para deduplicação de pares | Garante key canônica independente de ordem dos times |
+| `[a,b].sort().join('|')` para deduplicação de pares | Key canônica independente de ordem dos times |
+| `as unknown as Array<{...}>` em joins Supabase | PostgREST retorna relações como objetos |
 | `localeCompare('pt-BR')` em ordenações | Lida corretamente com cedilhas e acentos |
+| Cada view component owns seu próprio estado | Evita prop drilling — cada aba é independente |
 
 ---
 
-## 9. Estado Atual
+## 11. Estado Atual (maio 2026) — SISTEMA COMPLETO
 
-### ✅ Implementado e funcionando
+### ✅ Implementado
 
-- Tabs: Planejar, Visão Geral, Pool de Jogos, Importar, Logs
-- Motor de matchmaking por disponibilidade + score de defasagem
-- Box de Montagem com campos Nº / Horário / Local por jogo
-- Confirmação de rodada com campos logísticos
-- Rodada Oficial como tabela full-width agrupada por data+local
-- Undo limpa numero_jogo/horario/local/data_agendada no banco
-- Próximo número correto (ignora pendentes)
-- Formatação correta de datas com timestamps via `ymd()`
-- Pool com auto-geração de round-robin
-- Importação de equipes + round-robin diff
-- Importação de disponibilidades
-- Visão Geral com JP/JA/JR por time e campeonato
-- Logs de transações com join em equipes
+- Autenticação com login/logout (cookie httpOnly, middleware de proteção)
+- Refactoring completo: `page.tsx` 1990 → 58 linhas; 15+ componentes extraídos
+- Toast system (Zustand) substitui feedback inline
+- Confirmação antes de desfazer E antes de marcar como realizado (inline, contextual)
+- Filtro por campeonato no Pool de Jogos
+- Paginação nos Logs (50/página + carregar mais)
+- Header responsivo (labels somem em mobile, só ícone)
+- Numeração de jogos corrigida: reutiliza slots liberados por undo (menor disponível, não MAX+1)
+- Todas as funcionalidades anteriores mantidas
 
-### ⚠️ Pendente / Próximos Passos
+### Pendente — Para Deploy
 
-**Bloqueante:**
-1. Rodar a migration das 3 colunas no Supabase (ver seção 3)
-2. Após migration, regenerar tipos:
-   ```bash
-   npx supabase gen types typescript --project-id <SEU_PROJECT_ID> > lib/database.types.ts
-   ```
-   Depois remover os `as any` em `confirmar/route.ts` e `atualizar-status/route.ts`
-
-**Melhorias futuras (não solicitadas):**
-- Editar numero_jogo/horario/local de jogos já agendados inline
-- Filtro por data/categoria na Rodada Oficial
-- Exportar escala como PDF/CSV
-- Reverter lote inteiro por batch_id (Ctrl+Z em bloco)
-- Autenticação (sistema hoje é público)
-- Responsividade mobile (header de abas e tabela de logs)
+1. **Variáveis de ambiente no host**: `AUTH_USERNAME`, `AUTH_PASSWORD`, `AUTH_SECRET` + Supabase vars
+2. **Trocar credenciais padrão**: `ccb2026` → senha forte antes de ir ao ar
+3. **Supabase RLS**: anon key está exposta no frontend — ativar Row Level Security nas tabelas
+4. **Regenerar tipos Supabase** (remove `as any`): `npx supabase gen types typescript --project-id <id> > lib/database.types.ts`
