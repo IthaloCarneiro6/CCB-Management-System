@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server'
 
 const SESSION_COOKIE = 'ccb_session'
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (pathname.startsWith('/login') || pathname.startsWith('/api/auth')) {
