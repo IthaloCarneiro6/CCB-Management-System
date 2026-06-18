@@ -75,7 +75,7 @@ export default function LoginPage() {
                 autoComplete="username"
                 autoFocus
                 required
-                placeholder="gestor"
+                placeholder="Insira Usuário"
                 className="bg-neutral-800 border border-neutral-700 text-neutral-200 text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 transition-colors placeholder:text-neutral-600"
               />
             </div>
@@ -91,7 +91,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   autoComplete="current-password"
                   required
-                  placeholder="••••••••"
+                  placeholder="Insira senha"
                   className="w-full bg-neutral-800 border border-neutral-700 text-neutral-200 text-sm rounded-xl px-3 py-2.5 pr-10 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 transition-colors placeholder:text-neutral-600"
                 />
                 <button
