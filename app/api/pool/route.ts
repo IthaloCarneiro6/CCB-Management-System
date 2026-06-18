@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-server'
 
 type RawPartida = {
   id: string
@@ -8,6 +9,9 @@ type RawPartida = {
 }
 
 export async function GET() {
+  const unauthorized = await requireAuth()
+  if (unauthorized) return unauthorized
+
   const [campRes, eqRes, anyPartidaRes] = await Promise.all([
     supabase.from('campeonatos').select('id, nome, formato_chaves').order('nome'),
     supabase.from('equipes').select('id, campeonato_id, nome, chave').order('nome'),

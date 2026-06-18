@@ -1,6 +1,10 @@
 import { supabase } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-server'
 
 export async function GET() {
+  const unauthorized = await requireAuth()
+  if (unauthorized) return unauthorized
+
   const { data, error } = await supabase
     .from('campeonatos')
     .select('id, nome')

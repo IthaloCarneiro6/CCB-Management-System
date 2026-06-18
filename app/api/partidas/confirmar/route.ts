@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-server'
 
 type PartidaInput = {
   id: string
@@ -11,6 +12,9 @@ type PartidaInput = {
 }
 
 export async function POST(request: Request) {
+  const unauthorized = await requireAuth()
+  if (unauthorized) return unauthorized
+
   const body = await request.json()
   const { partidas, acao } = body as { partidas: PartidaInput[]; acao: string }
 

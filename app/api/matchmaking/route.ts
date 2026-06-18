@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-server'
 
 const LIMIAR_ALTA_DEFASAGEM = 4
 
@@ -31,6 +32,9 @@ type Disponibilidade = {
 }
 
 export async function POST(request: Request) {
+  const unauthorized = await requireAuth()
+  if (unauthorized) return unauthorized
+
   const body = await request.json()
   const { data_sabado, data_domingo, campeonato_id } = body as {
     data_sabado?: string

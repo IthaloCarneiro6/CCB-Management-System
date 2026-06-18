@@ -1,5 +1,6 @@
 import Papa from 'papaparse'
 import { supabase } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-server'
 
 // Accepts both old format (equipe, data) and Google Forms format
 type CsvRowOld = { equipe: string; data: string }
@@ -32,6 +33,9 @@ function parseDatePart(valor: string): string | null {
 }
 
 export async function POST(request: Request) {
+  const unauthorized = await requireAuth()
+  if (unauthorized) return unauthorized
+
   const formData = await request.formData()
   const file = formData.get('file') as File | null
   const campeonato_id = formData.get('campeonato_id') as string | null

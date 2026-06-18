@@ -1,8 +1,12 @@
 import { supabase } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-server'
 
 type Row = { nome: string; eh_interior?: string | boolean }
 
 export async function POST(request: Request) {
+  const unauthorized = await requireAuth()
+  if (unauthorized) return unauthorized
+
   const { campeonato_id, rows } = (await request.json()) as { campeonato_id: string; rows: Row[] }
 
   if (!campeonato_id || !rows?.length) {

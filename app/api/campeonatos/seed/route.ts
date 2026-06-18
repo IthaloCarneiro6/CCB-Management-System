@@ -1,6 +1,10 @@
 import { supabase } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-server'
 
 export async function POST(request: Request) {
+  const unauthorized = await requireAuth()
+  if (unauthorized) return unauthorized
+
   const body = await request.json()
   const { campeonato_id } = body as { campeonato_id: string }
 
