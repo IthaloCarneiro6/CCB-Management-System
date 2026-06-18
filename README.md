@@ -3,7 +3,7 @@
 **Ithalo Carneiro**
 *   Graduando em Engenharia de Computação pela Universidade Federal do Ceará (UFC).
 *   Desenvolvedor Full Stack com foco em IA e Analytics.
-*   Organizador e Atleta do Circuito Cearense de Basquete.
+*   Organizador e Atleta da Copa Cearense de Basquete.
 
 ---
 > *Este projeto faz parte da evolução tecnológica do basquete cearense, unindo engenharia e esporte.*
